@@ -4,6 +4,7 @@ import { useTournamentStore } from '../store/useTournamentStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { toast } from '../store/useToastStore';
+import { Shuffle } from 'lucide-react';
 
 function getTierStyle(tier) {
   switch (tier) {
@@ -17,7 +18,7 @@ function getTierStyle(tier) {
 
 function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, selectedSlot, lastSwappedSlot, showMarking, onSelect }) {
   const isSelected = selectedSlot?.team === team && selectedSlot?.index === index;
-  const isAnimating = lastSwappedSlot === `${team}-${index}`;
+  const isAnimating = lastSwappedSlot === `${team}-${index}` || lastSwappedSlot === 'all';
   
   let pStats = 0;
   if (playerObj) {
@@ -27,10 +28,10 @@ function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, sel
   return (
     <motion.button
       animate={isAnimating ? { 
-        scale: [1, 1.1, 1], 
+        scale: [1, 1.05, 1], 
         backgroundColor: ["#1e293b", "#059669", "#1e293b"],
         boxShadow: ["0px 0px 0px rgba(16,185,129,0)", "0px 0px 20px rgba(16,185,129,0.8)", "0px 0px 0px rgba(16,185,129,0)"],
-        y: [0, -5, 0]
+        y: [0, -4, 0]
       } : {}}
       transition={{ duration: 0.6, ease: "easeInOut" }}
       onClick={() => onSelect({ team, index })}
@@ -62,7 +63,7 @@ function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, sel
 }
 
 export default function SwapModal({ isOpen, matchKey, onClose }) {
-  const { matches, players, teams, customCourtNames, executeSwap, config, showBadges } = useTournamentStore();
+  const { matches, players, teams, customCourtNames, executeSwap, shuffleCourt, config, showBadges } = useTournamentStore();
   const showMarking = config.type.includes('marked') && showBadges;
   const [selectedSlot, setSelectedSlot] = useState(null); // { team: 1|2, index: 0|1 }
   const [lastSwappedSlot, setLastSwappedSlot] = useState(null);
@@ -170,6 +171,20 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
     }, 500);
   };
 
+  const handleShuffle = () => {
+    const success = shuffleCourt(matchKey);
+    if (success) {
+      setSelectedSlot(null);
+      setLastSwappedSlot('all');
+      setTimeout(() => {
+        setLastSwappedSlot(null);
+      }, 600);
+      toast.success("Susunan pemain berhasil di-shuffle!");
+    } else {
+      toast.error("Tidak dapat melakukan shuffle pada court ini.");
+    }
+  };
+
   const modalContent = (
     <AnimatePresence>
       <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 backdrop-blur-sm">
@@ -179,9 +194,22 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
           exit={{ opacity: 0, scale: 0.95 }}
           className="bg-slate-800 border border-slate-600/80 rounded-3xl shadow-2xl max-w-2xl w-full p-5 md:p-6 relative flex flex-col max-h-[90vh]"
         >
-          <h3 className="text-xl font-bold text-white mb-4 border-b border-slate-700/50 pb-3 flex items-center gap-2">
-            Edit Court <span className="px-2 py-0.5 rounded shadow-sm border border-slate-600 bg-slate-900/50 text-[12px] align-middle font-mono text-slate-300">{cName}</span>
-          </h3>
+          <div className="flex items-center justify-between mb-4 border-b border-slate-700/50 pb-3 flex-wrap gap-2">
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              Edit Court <span className="px-2 py-0.5 rounded shadow-sm border border-slate-600 bg-slate-900/50 text-[12px] align-middle font-mono text-slate-300">{cName}</span>
+            </h3>
+
+            <button
+              type="button"
+              onClick={handleShuffle}
+              disabled={m.score1 !== null && m.score2 !== null}
+              className="text-xs bg-indigo-600/90 hover:bg-indigo-500 active:scale-95 text-white px-3.5 py-2 rounded-xl transition font-bold shadow-lg shadow-indigo-900/30 flex items-center gap-1.5 border border-indigo-400/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Shuffle susunan pemain secara otomatis"
+            >
+              <Shuffle className="w-3.5 h-3.5 text-indigo-200" />
+              <span>Shuffle</span>
+            </button>
+          </div>
           
           <div className="bg-slate-900/60 rounded-2xl border border-slate-700/50 p-3 mb-4 flex relative items-center gap-8 md:gap-10 shadow-inner">
             <div className="w-1/2 flex flex-col gap-3 justify-center">

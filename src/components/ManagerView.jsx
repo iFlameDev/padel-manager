@@ -141,7 +141,6 @@ export default function ManagerView() {
                     ) : null;
 
                     const courtHasNext = Object.values(matches).some(nm => nm.court === m.court && nm.round > activeRoundTab);
-                    const isLocked = courtHasNext;
 
                     const s1 = m.score1 !== null ? String(m.score1).padStart(2,'0') : '00';
                     const s2 = m.score2 !== null ? String(m.score2).padStart(2,'0') : '00';
@@ -170,23 +169,23 @@ export default function ManagerView() {
                     return (
                       <div key={matchKey} className="relative bg-slate-800 rounded-xl shadow border border-slate-700 group mt-4 hover:border-slate-600 transition">
                         <div className="absolute -top-6 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-                          <div onClick={() => isHost && !isLocked && setScoreModalState({ isOpen: true, matchKey, teamIndex: 1 })} className={clsx("w-14 h-14 flex items-center justify-center font-bold text-3xl rounded-xl shadow transition transform border", isHost && !isLocked ? "cursor-pointer active:scale-95 hover:bg-slate-600" : "cursor-default opacity-90", sc1)}>
+                          <div onClick={() => isHost && setScoreModalState({ isOpen: true, matchKey, teamIndex: 1 })} className={clsx("w-14 h-14 flex items-center justify-center font-bold text-3xl rounded-xl shadow transition transform border", isHost ? "cursor-pointer active:scale-95 hover:bg-slate-600" : "cursor-default opacity-90", sc1)}>
                             {s1}
                           </div>
-                          <div onClick={() => isHost && !isLocked && setScoreModalState({ isOpen: true, matchKey, teamIndex: 2 })} className={clsx("w-14 h-14 flex items-center justify-center font-bold text-3xl rounded-xl shadow transition transform border", isHost && !isLocked ? "cursor-pointer active:scale-95 hover:bg-slate-600" : "cursor-default opacity-90", sc2)}>
+                          <div onClick={() => isHost && setScoreModalState({ isOpen: true, matchKey, teamIndex: 2 })} className={clsx("w-14 h-14 flex items-center justify-center font-bold text-3xl rounded-xl shadow transition transform border", isHost ? "cursor-pointer active:scale-95 hover:bg-slate-600" : "cursor-default opacity-90", sc2)}>
                             {s2}
                           </div>
                         </div>
 
                         <div className="flex h-full min-h-[100px]">
-                          <div onClick={() => isHost && !isLocked && setScoreModalState({ isOpen: true, matchKey, teamIndex: 1 })} className={clsx("w-1/2 pt-6 pb-6 border-r border-slate-700 px-3 sm:px-5 flex flex-col justify-center gap-3 transition rounded-l-xl", isHost && !isLocked ? "cursor-pointer hover:bg-slate-700/50" : "cursor-default", t1WinClass)}>
+                          <div onClick={() => isHost && setScoreModalState({ isOpen: true, matchKey, teamIndex: 1 })} className={clsx("w-1/2 pt-6 pb-6 border-r border-slate-700 px-3 sm:px-5 flex flex-col justify-center gap-3 transition rounded-l-xl", isHost ? "cursor-pointer hover:bg-slate-700/50" : "cursor-default", t1WinClass)}>
                             {team1Obj && (
                                <div className="absolute -top-2.5 left-4 text-[10px] font-bold text-indigo-400 bg-slate-900 px-2 py-0.5 rounded-md border border-indigo-700/50 uppercase tracking-wide shadow-sm z-10">{team1Obj.name}</div>
                             )}
                             <div className="text-[15px] font-medium text-slate-200 truncate flex items-center gap-2">{renderTier(p1.tier)} {p1.name}</div>
                             <div className="text-[15px] font-medium text-slate-200 truncate flex items-center gap-2">{renderTier(p2.tier)} {p2.name}</div>
                           </div>
-                          <div onClick={() => isHost && !isLocked && setScoreModalState({ isOpen: true, matchKey, teamIndex: 2 })} className={clsx("w-1/2 pt-6 pb-6 px-3 sm:px-5 flex flex-col justify-center gap-3 text-right transition rounded-r-xl", isHost && !isLocked ? "cursor-pointer hover:bg-slate-700/50" : "cursor-default", t2WinClass)}>
+                          <div onClick={() => isHost && setScoreModalState({ isOpen: true, matchKey, teamIndex: 2 })} className={clsx("w-1/2 pt-6 pb-6 px-3 sm:px-5 flex flex-col justify-center gap-3 text-right transition rounded-r-xl", isHost ? "cursor-pointer hover:bg-slate-700/50" : "cursor-default", t2WinClass)}>
                             {team2Obj && (
                                <div className="absolute -top-2.5 right-4 text-[10px] font-bold text-indigo-400 bg-slate-900 px-2 py-0.5 rounded-md border border-indigo-700/50 uppercase tracking-wide shadow-sm z-10">{team2Obj.name}</div>
                             )}
@@ -195,14 +194,14 @@ export default function ManagerView() {
                           </div>
                         </div>
 
-                        {isHost && !isLocked && (
+                        {isHost && (
                           <div onClick={() => setSwapModalState({ isOpen: true, matchKey })} className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[11px] bg-slate-900 text-slate-300 px-4 py-1.5 rounded-full border border-slate-700 flex gap-2 items-center cursor-pointer hover:bg-slate-800 transition shadow z-20 whitespace-nowrap">
                             <Edit3 className="w-3.5 h-3.5 text-slate-400" />
                             {cName}
                             {courtHasNext && <Check className="w-3 h-3 text-emerald-500" strokeWidth={3} />}
                           </div>
                         )}
-                        {(!isHost || isLocked) && (
+                        {!isHost && (
                           <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[11px] bg-slate-900 text-slate-500 px-4 py-1.5 rounded-full border border-slate-800 flex gap-2 items-center z-20 whitespace-nowrap">
                             {cName}
                             {courtHasNext && <Check className="w-3 h-3 text-emerald-500" strokeWidth={3} />}

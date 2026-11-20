@@ -662,6 +662,393 @@ export const useTournamentStore = create((set, get) => ({
     get().saveToHistory();
   },
 
+  shuffleCourt: (matchKey) => {
+    const state = get();
+    const currentMatch = state.matches[matchKey];
+    if (!currentMatch) return false;
+
+    // Cannot shuffle already scored match
+    if (currentMatch.score1 !== null && currentMatch.score2 !== null) {
+      return false;
+    }
+
+    const activePlayers = state.players.filter((p) => !p.isWalkout);
+    if (activePlayers.length < 4) return false;
+
+    const { stats } = state.getLeaderboardStats();
+
+    // Past matches for partner repeat count
+    const sortedFinishedMatches = Object.values(state.matches).filter(
+      (m) => m.score1 !== null && m.score2 !== null
+    );
+
+    const getPartnerRepeatCount = (id1, id2) => {
+      if (!id1 || !id2) return 0;
+      let count = 0;
+      sortedFinishedMatches.forEach((m) => {
+        const inT1 = m.t1.includes(id1) && m.t1.includes(id2);
+        const inT2 = m.t2.includes(id1) && m.t2.includes(id2);
+        if (inT1 || inT2) count++;
+      });
+      return count;
+    };
+
+    // Identify players on other courts in the same round
+    const otherMatchesInRound = Object.values(state.matches).filter(
+      (m) => m.round === currentMatch.round && m.court !== currentMatch.court
+    );
+
+    const scoredOtherPlayerIds = new Set();
+    const unscoredOtherMatches = [];
+    otherMatchesInRound.forEach((m) => {
+      if (m.score1 !== null && m.score2 !== null) {
+        m.t1.forEach((id) => id && scoredOtherPlayerIds.add(id));
+        m.t2.forEach((id) => id && scoredOtherPlayerIds.add(id));
+      } else {
+        unscoredOtherMatches.push(m);
+      }
+    });
+
+    const unscoredOtherPlayerIds = new Set();
+    unscoredOtherMatches.forEach((m) => {
+      m.t1.forEach((id) => id && unscoredOtherPlayerIds.add(id));
+      m.t2.forEach((id) => id && unscoredOtherPlayerIds.add(id));
+    });
+
+    // Current players on this court
+    const currentCourtPlayerIds = [...currentMatch.t1, ...currentMatch.t2].filter(Boolean);
+
+    // Resting players in this round
+    const restingPlayers = activePlayers.filter(
+      (p) =>
+        !currentCourtPlayerIds.includes(p.id) &&
+        !scoredOtherPlayerIds.has(p.id) &&
+        !unscoredOtherPlayerIds.has(p.id)
+    );
+
+    // Primary pool: current players on this court + resting players
+    const candidatePlayerPool = activePlayers.filter(
+      (p) =>
+        currentCourtPlayerIds.includes(p.id) ||
+        restingPlayers.some((rp) => rp.id === p.id)
+    );
+
+    // Extended pool: also include players from unscored other courts if resting players = 0
+    let extendedPlayerPool = [...candidatePlayerPool];
+    if (restingPlayers.length === 0 && unscoredOtherMatches.length > 0) {
+      const unscoredOtherPlayers = activePlayers.filter((p) =>
+        unscoredOtherPlayerIds.has(p.id)
+      );
+      extendedPlayerPool.push(...unscoredOtherPlayers);
+    }
+
+    // Helper to build entities (teams and solos) from a player pool
+    const buildEntities = (poolPlayers) => {
+      const handled = new Set();
+      const entities = [];
+      (state.teams || []).forEach((t) => {
+        const p1 = poolPlayers.find((p) => p.id === t.playerIds[0]);
+        const p2 = poolPlayers.find((p) => p.id === t.playerIds[1]);
+        if (p1 && p2) {
+          entities.push({
+            isTeam: true,
+            teamId: t.id,
+            players: [p1, p2],
+            playerIds: [p1.id, p2.id]
+          });
+          handled.add(p1.id);
+          handled.add(p2.id);
+        }
+      });
+      poolPlayers.forEach((p) => {
+        if (!handled.has(p.id)) {
+          entities.push({
+            isTeam: false,
+            players: [p],
+            playerIds: [p.id]
+          });
+        }
+      });
+      return entities;
+    };
+
+    const areSetsEqual = (a, b) => {
+      if (a.size !== b.size) return false;
+      for (let item of a) {
+        if (!b.has(item)) return false;
+      }
+      return true;
+    };
+
+    const prevT1Set = new Set(currentMatch.t1.filter(Boolean));
+    const prevT2Set = new Set(currentMatch.t2.filter(Boolean));
+
+    const isIdentical = (t1, t2) => {
+      if (prevT1Set.size === 0 && prevT2Set.size === 0) return false;
+      const s1 = new Set(t1);
+      const s2 = new Set(t2);
+      return (
+        (areSetsEqual(s1, prevT1Set) && areSetsEqual(s2, prevT2Set)) ||
+        (areSetsEqual(s1, prevT2Set) && areSetsEqual(s2, prevT1Set))
+      );
+    };
+
+    const isMarked = state.config.type.includes('marked');
+    const tierVal = { A: 4, B: 3, C: 2, D: 1 };
+    const minGamesOverall = Math.min(...activePlayers.map((p) => stats[p.id]?.games || 0));
+
+    // Calculate score / penalty for a candidate match { t1, t2 }
+    const scoreCandidate = (t1, t2) => {
+      const allIds = [...t1, ...t2];
+      const playersObj = allIds.map((id) => state.players.find((p) => p.id === id)).filter(Boolean);
+
+      // 1. Game Count Priority (fewer games = lower penalty)
+      let penaltyGames = 0;
+      playersObj.forEach((p) => {
+        const pGames = stats[p.id]?.games || 0;
+        penaltyGames += (pGames - minGamesOverall) * 60;
+      });
+      const gamesArr = playersObj.map((p) => stats[p.id]?.games || 0);
+      const gameSpread = Math.max(...gamesArr) - Math.min(...gamesArr);
+      penaltyGames += gameSpread * 25;
+
+      // 2. Marked Tier Balance Priority
+      let penaltyTier = 0;
+      if (isMarked) {
+        const t1Tiers = [playersObj[0]?.tier, playersObj[1]?.tier];
+        const t2Tiers = [playersObj[2]?.tier, playersObj[3]?.tier];
+        const sum1 = (tierVal[t1Tiers[0]] || 2.5) + (tierVal[t1Tiers[1]] || 2.5);
+        const sum2 = (tierVal[t2Tiers[0]] || 2.5) + (tierVal[t2Tiers[1]] || 2.5);
+        const diff = Math.abs(sum1 - sum2);
+        penaltyTier = diff * 45;
+      }
+
+      // 3. Points Balance (Mexicano)
+      let penaltyPoints = 0;
+      if (!isMarked && state.config.type.includes('mexicano')) {
+        const pts1 = (stats[playersObj[0]?.id]?.points || 0) + (stats[playersObj[1]?.id]?.points || 0);
+        const pts2 = (stats[playersObj[2]?.id]?.points || 0) + (stats[playersObj[3]?.id]?.points || 0);
+        penaltyPoints = Math.min(Math.abs(pts1 - pts2), 30) * 2;
+      }
+
+      // 4. Partner Repeat Avoidance
+      let penaltyPartner = 0;
+      const isFixedTeam1 = (state.teams || []).some(
+        (t) =>
+          (t.playerIds[0] === t1[0] && t.playerIds[1] === t1[1]) ||
+          (t.playerIds[0] === t1[1] && t.playerIds[1] === t1[0])
+      );
+      const isFixedTeam2 = (state.teams || []).some(
+        (t) =>
+          (t.playerIds[0] === t2[0] && t.playerIds[1] === t2[1]) ||
+          (t.playerIds[0] === t2[1] && t.playerIds[1] === t2[0])
+      );
+      if (!isFixedTeam1) {
+        penaltyPartner += getPartnerRepeatCount(t1[0], t1[1]) * 40;
+      }
+      if (!isFixedTeam2) {
+        penaltyPartner += getPartnerRepeatCount(t2[0], t2[1]) * 40;
+      }
+
+      return penaltyGames + penaltyTier + penaltyPoints + penaltyPartner;
+    };
+
+    // Generate candidate configurations from entity list
+    const generateCandidates = (entities) => {
+      const candidates = [];
+      const n = entities.length;
+
+      for (let i = 0; i < n; i++) {
+        const e1 = entities[i];
+        if (e1.players.length === 2) {
+          for (let j = i + 1; j < n; j++) {
+            const e2 = entities[j];
+            if (e2.players.length === 2) {
+              candidates.push({
+                t1: [e1.players[0].id, e1.players[1].id],
+                t2: [e2.players[0].id, e2.players[1].id],
+                usedEntities: [e1, e2]
+              });
+            } else if (e2.players.length === 1) {
+              for (let k = j + 1; k < n; k++) {
+                const e3 = entities[k];
+                if (e3.players.length === 1) {
+                  candidates.push({
+                    t1: [e1.players[0].id, e1.players[1].id],
+                    t2: [e2.players[0].id, e3.players[0].id],
+                    usedEntities: [e1, e2, e3]
+                  });
+                }
+              }
+            }
+          }
+        } else if (e1.players.length === 1) {
+          for (let j = i + 1; j < n; j++) {
+            const e2 = entities[j];
+            if (e2.players.length === 2) {
+              for (let k = j + 1; k < n; k++) {
+                const e3 = entities[k];
+                if (e3.players.length === 1) {
+                  candidates.push({
+                    t1: [e2.players[0].id, e2.players[1].id],
+                    t2: [e1.players[0].id, e3.players[0].id],
+                    usedEntities: [e1, e2, e3]
+                  });
+                }
+              }
+            } else if (e2.players.length === 1) {
+              for (let k = j + 1; k < n; k++) {
+                const e3 = entities[k];
+                if (e3.players.length === 2) {
+                  candidates.push({
+                    t1: [e3.players[0].id, e3.players[1].id],
+                    t2: [e1.players[0].id, e2.players[0].id],
+                    usedEntities: [e1, e2, e3]
+                  });
+                } else if (e3.players.length === 1) {
+                  for (let l = k + 1; l < n; l++) {
+                    const e4 = entities[l];
+                    if (e4.players.length === 1) {
+                      const s1 = e1.players[0].id;
+                      const s2 = e2.players[0].id;
+                      const s3 = e3.players[0].id;
+                      const s4 = e4.players[0].id;
+                      candidates.push(
+                        { t1: [s1, s2], t2: [s3, s4], usedEntities: [e1, e2, e3, e4] },
+                        { t1: [s1, s3], t2: [s2, s4], usedEntities: [e1, e2, e3, e4] },
+                        { t1: [s1, s4], t2: [s2, s3], usedEntities: [e1, e2, e3, e4] }
+                      );
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return candidates;
+    };
+
+    let entities = buildEntities(candidatePlayerPool);
+    let allCandidates = generateCandidates(entities);
+    let validNonIdentical = allCandidates.filter((c) => !isIdentical(c.t1, c.t2));
+
+    let usedExtendedPool = false;
+    if (validNonIdentical.length === 0 && extendedPlayerPool.length > candidatePlayerPool.length) {
+      entities = buildEntities(extendedPlayerPool);
+      allCandidates = generateCandidates(entities);
+      validNonIdentical = allCandidates.filter((c) => !isIdentical(c.t1, c.t2));
+      if (validNonIdentical.length > 0) {
+        usedExtendedPool = true;
+      }
+    }
+
+    if (validNonIdentical.length === 0) {
+      if (allCandidates.length > 0) {
+        const fallback = allCandidates[0];
+        validNonIdentical = [
+          {
+            t1: fallback.t2,
+            t2: fallback.t1,
+            usedEntities: fallback.usedEntities
+          }
+        ];
+      } else {
+        return false;
+      }
+    }
+
+    const scoredCandidates = validNonIdentical.map((c) => ({
+      ...c,
+      penalty: scoreCandidate(c.t1, c.t2)
+    }));
+
+    scoredCandidates.sort((a, b) => a.penalty - b.penalty);
+
+    const minPenalty = scoredCandidates[0].penalty;
+    const topCandidates = scoredCandidates.filter((c) => c.penalty <= minPenalty + 30);
+    const chosen = topCandidates[Math.floor(Math.random() * topCandidates.length)];
+
+    let nextMatches = { ...state.matches };
+    const updatedCourtMatch = {
+      ...currentMatch,
+      t1: chosen.t1,
+      t2: chosen.t2
+    };
+    nextMatches[matchKey] = updatedCourtMatch;
+
+    if (usedExtendedPool) {
+      const chosenPlayerIds = new Set([...chosen.t1, ...chosen.t2]);
+      unscoredOtherMatches.forEach((otherM) => {
+        const otherMatchKey = `r${otherM.round}-c${otherM.court}`;
+        let otherT1 = [...(nextMatches[otherMatchKey]?.t1 || otherM.t1)];
+        let otherT2 = [...(nextMatches[otherMatchKey]?.t2 || otherM.t2)];
+        let missingFromOther = [];
+
+        otherT1 = otherT1.map((id) => {
+          if (id && chosenPlayerIds.has(id)) {
+            missingFromOther.push(id);
+            return null;
+          }
+          return id;
+        });
+        otherT2 = otherT2.map((id) => {
+          if (id && chosenPlayerIds.has(id)) {
+            missingFromOther.push(id);
+            return null;
+          }
+          return id;
+        });
+
+        if (missingFromOther.length > 0) {
+          const displaced = currentCourtPlayerIds.filter((id) => !chosenPlayerIds.has(id));
+          let displacedIdx = 0;
+          otherT1 = otherT1.map((id) => {
+            if (id === null && displacedIdx < displaced.length) {
+              return displaced[displacedIdx++];
+            }
+            return id;
+          });
+          otherT2 = otherT2.map((id) => {
+            if (id === null && displacedIdx < displaced.length) {
+              return displaced[displacedIdx++];
+            }
+            return id;
+          });
+
+          nextMatches[otherMatchKey] = {
+            ...otherM,
+            t1: otherT1,
+            t2: otherT2
+          };
+        }
+      });
+    }
+
+    let nextPlayers = state.players.map((p) => {
+      if (!p.isWalkout) return { ...p, status: 'rest', court: null };
+      return p;
+    });
+
+    Object.values(nextMatches).forEach((rm) => {
+      if (rm.score1 === null || rm.score2 === null) {
+        [...rm.t1, ...rm.t2].forEach((id) => {
+          if (id !== null) {
+            let pIndex = nextPlayers.findIndex((x) => x.id === id);
+            if (pIndex !== -1) {
+              nextPlayers[pIndex].status = 'playing';
+              nextPlayers[pIndex].court = rm.court;
+            }
+          }
+        });
+      }
+    });
+
+    set({ matches: nextMatches, players: nextPlayers });
+    get().saveToHistory();
+    return true;
+  },
+
   getLeaderboardStats: () => {
     const state = get();
     let stats = {};
