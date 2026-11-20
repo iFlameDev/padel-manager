@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTournamentStore } from '../store/useTournamentStore';
-import { FileText, List, X, Plus, HelpCircle, History } from 'lucide-react';
+import { FileText, List, X, Plus, HelpCircle, History, Edit3 } from 'lucide-react';
 import clsx from 'clsx';
+import { toast } from '../store/useToastStore';
 
 export default function SetupView() {
   const { config, updateConfig, currentView, setView, numCourts, setNumCourts, customCourtNames, setCustomCourtNames, players, isTournamentStarted, matches, startTournament } = useTournamentStore();
@@ -13,9 +14,12 @@ export default function SetupView() {
   const isDisabled = isTournamentStarted && hasScoredMatches;
   const [localCourtNames, setLocalCourtNames] = useState(customCourtNames);
   
-  const [isBulkMode, setIsBulkMode] = useState(false);
-  const [bulkText, setBulkText] = useState('');
   const [playerRows, setPlayerRows] = useState([]);
+  const [localTeams, setLocalTeams] = useState([]);
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [newTeamName, setNewTeamName] = useState('');
+  const [selectedP1, setSelectedP1] = useState('');
+  const [selectedP2, setSelectedP2] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
 
@@ -51,12 +55,6 @@ export default function SetupView() {
         rows.push({ id: Date.now(), name: '', tier: 'B', isInactive: false, pid: null });
       }
       setPlayerRows(rows);
-      
-      const bulkStr = players.map(p => {
-        const suffix = p.isWalkout ? ' [OFF]' : '';
-        return localConfig.type.includes('marked') ? `${p.name} - ${p.tier}${suffix}` : `${p.name}${suffix}`;
-      }).join('\n');
-      setBulkText(bulkStr);
     } else {
       setPlayerRows([
         { id: 1, name: '', tier: 'B', isInactive: false, pid: null },
@@ -64,6 +62,9 @@ export default function SetupView() {
         { id: 3, name: '', tier: 'B', isInactive: false, pid: null }
       ]);
     }
+
+    const storeTeams = useTournamentStore.getState().teams;
+    if (storeTeams) setLocalTeams(storeTeams);
   }, [config, numCourts, customCourtNames, players, currentView]);
 
   useEffect(() => {
@@ -84,11 +85,7 @@ export default function SetupView() {
         pid: null
       }));
       setPlayerRows(rows);
-      
-      const bulkStr = generatedPlayers.map(p => {
-        return localConfig.type.includes('marked') ? `${p.name} - ${p.tier}` : p.name;
-      }).join('\n');
-      setBulkText(bulkStr);
+      setLocalTeams([]);
 
       setLocalConfig(prev => ({
         ...prev,
@@ -118,48 +115,110 @@ export default function SetupView() {
   };
 
   const updateRow = (id, field, value) => {
-    setPlayerRows(prev => prev.map(row => row.id === id ? { ...row, [field]: value } : row));
+    setPlayerRows(prev => {
+      let newRows = prev.map(row => row.id === id ? { ...row, [field]: value } : row);
+      if (field === 'isInactive') {
+         const team = localTeams.find(t => t.playerIds[0] === id || t.playerIds[1] === id);
+         if (team) {
+            const partnerId = team.playerIds[0] === id ? team.playerIds[1] : team.playerIds[0];
+            newRows = newRows.map(row => row.id === partnerId ? { ...row, [field]: value } : row);
+         }
+      }
+      return newRows;
+    });
   };
 
   const removeRow = (id) => {
     setPlayerRows(prev => prev.filter(row => row.id !== id));
+    setLocalTeams(prev => prev.filter(t => t.playerIds[0] !== id && t.playerIds[1] !== id));
+  };
+
+  const removeTeam = (id) => {
+    setLocalTeams(prev => prev.filter(t => t.id !== id));
+  };
+
+  const editTeam = (team) => {
+    setNewTeamName(team.name);
+    setSelectedP1(team.playerIds[0]);
+    setSelectedP2(team.playerIds[1]);
+    removeTeam(team.id);
+  };
+
+  const createTeam = () => {
+    if (!newTeamName.trim() || !selectedP1 || !selectedP2) return toast.error("Pilih dua pemain dan isi nama tim.");
+    if (selectedP1 === selectedP2) return toast.error("Pilih pemain yang berbeda.");
+    const p1 = parseInt(selectedP1);
+    const p2 = parseInt(selectedP2);
+    setLocalTeams(prev => [...prev, {
+      id: `t_${Date.now()}`,
+      name: newTeamName.trim(),
+      playerIds: [p1, p2]
+    }]);
+    setNewTeamName('');
+    setSelectedP1('');
+    setSelectedP2('');
+  };
+
+  const autoAssignTeams = () => {
+    let activePlayers = playerRows.filter(r => r.name.trim() !== '' && !r.isInactive);
+    let assignedIds = new Set();
+    localTeams.forEach(t => {
+      assignedIds.add(t.playerIds[0]);
+      assignedIds.add(t.playerIds[1]);
+    });
+    
+    let availableSolos = activePlayers.filter(p => !assignedIds.has(p.id));
+    if (availableSolos.length < 2) return toast.error('Tidak cukup pemain solo untuk dipasangkan.');
+    
+    let newTeams = [...localTeams];
+    for (let i = 0; i < availableSolos.length - 1; i += 2) {
+      newTeams.push({
+        id: `t_${Date.now()}_${i}`,
+        name: `Team ${newTeams.length + 1}`,
+        playerIds: [availableSolos[i].id, availableSolos[i+1].id]
+      });
+    }
+    setLocalTeams(newTeams);
+    toast.success(`${Math.floor(availableSolos.length / 2)} tim baru berhasil di-assign otomatis.`);
   };
 
   const handleSave = () => {
-    let parsedData = [];
-    if (isBulkMode) {
-      const lines = bulkText.split('\n');
-      lines.forEach(line => {
-        let trimmed = line.trim();
-        if (!trimmed) return;
-        let isInactive = trimmed.includes('[OFF]') || trimmed.includes('[EXIT]');
-        let cleanLine = trimmed.replace('[OFF]', '').replace('[EXIT]', '').trim();
-        let match = cleanLine.match(/^(.+?)\s*-\s*([A-Da-d])$/i);
-        
-        let existingP = null;
-        if (match) {
-          existingP = players.find(p => p.name.toLowerCase() === match[1].trim().toLowerCase());
-          parsedData.push({ name: match[1].trim(), tier: match[2].toUpperCase(), pid: existingP ? existingP.id : null, isInactive });
-        } else {
-          existingP = players.find(p => p.name.toLowerCase() === cleanLine.toLowerCase());
-          parsedData.push({ name: cleanLine, tier: 'B', pid: existingP ? existingP.id : null, isInactive });
-        }
-      });
-    } else {
-      parsedData = playerRows.filter(r => r.name.trim() !== '').map(r => ({
-        name: r.name.trim(),
-        tier: r.tier,
-        pid: r.pid,
-        isInactive: r.isInactive
-      }));
+    const parsedData = playerRows.filter(r => r.name.trim() !== '').map(r => ({
+      name: r.name.trim(),
+      tier: r.tier,
+      pid: r.pid,
+      tempId: r.id,
+      isInactive: r.isInactive
+    }));
+
+    const names = parsedData.map(r => r.name.toLowerCase());
+    const uniqueNames = new Set(names);
+    if (uniqueNames.size !== names.length) {
+       toast.error("Terdapat nama pemain yang kembar (duplikat). Harap periksa kembali list pemain dan pastikan nama berbeda.");
+       return;
     }
 
-    startTournament(parsedData, localCourts, localConfig, localCourtNames);
+    startTournament(parsedData, localCourts, localConfig, localCourtNames, localTeams);
   };
 
   if (currentView !== 'setup' && currentView !== 'config') return null;
 
   const isMarked = localConfig.type.includes('marked');
+
+  const getDuplicateIds = () => {
+     const nameCounts = {};
+     playerRows.forEach(r => {
+        const n = r.name.trim().toLowerCase();
+        if (n) nameCounts[n] = (nameCounts[n] || 0) + 1;
+     });
+     const dups = new Set();
+     playerRows.forEach(r => {
+        const n = r.name.trim().toLowerCase();
+        if (n && nameCounts[n] > 1) dups.add(r.id);
+     });
+     return dups;
+  };
+  const duplicateIds = getDuplicateIds();
 
   return (
     <div className="w-full fade-in flex-shrink-0 flex flex-col gap-6 md:bg-slate-800 md:p-6 md:rounded-2xl md:shadow-xl md:border md:border-slate-700">
@@ -250,38 +309,49 @@ export default function SetupView() {
         {/* Player Input */}
         <div className="bg-slate-700/30 p-4 md:p-5 rounded-xl border border-slate-600 flex flex-col min-w-0 mb-6">
           <div className="flex justify-between items-center mb-4">
-            <label className="block text-sm font-bold text-slate-400 shrink-0">Data Pemain</label>
-            <button onClick={() => setIsBulkMode(!isBulkMode)} className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0">
-              {isBulkMode ? <List className="w-4 h-4"/> : <FileText className="w-4 h-4"/>}
-              {isBulkMode ? 'Ganti ke Baris' : 'Ganti Teks'}
+            <label className="block text-sm font-bold text-slate-400 shrink-0">Data Pemain & Team</label>
+            <button onClick={() => setShowTeamModal(true)} disabled={isDisabled} className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0 disabled:opacity-50">
+              <Plus className="w-4 h-4"/> Set Team
             </button>
           </div>
           
-          {!isBulkMode ? (
-            <div className="space-y-2 flex-grow min-w-0 w-full overflow-hidden">
-              <div className="text-[10px] font-normal text-slate-500 mb-2 uppercase tracking-wide">* Tekan 'Enter' di kolom nama untuk baris baru</div>
-              <div className="space-y-2 w-full">
-                {playerRows.map((row, index) => (
+          <div className="space-y-2 flex-grow min-w-0 w-full overflow-hidden">
+            <div className="text-[10px] font-normal text-slate-500 mb-2 uppercase tracking-wide">* Tekan 'Enter' di kolom nama untuk baris baru</div>
+            <div className="space-y-2 w-full">
+              {playerRows.map((row, index) => {
+                const teamObj = localTeams.find(t => t.playerIds.includes(row.id));
+                return (
                   <div key={row.id} className="flex items-center gap-2 player-row">
                     <span className="w-4 shrink-0 text-slate-500 font-mono text-right font-bold text-xs">{index + 1}.</span>
-                    <input 
-                      type="text" 
-                      placeholder="Nama" 
-                      value={row.name} 
-                      onChange={(e) => updateRow(row.id, 'name', e.target.value)} 
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          if (index === playerRows.length - 1) addRow();
-                        }
-                      }}
-                      className="min-w-0 flex-grow bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition" 
-                    />
+                    <div className="relative min-w-0 flex-grow">
+                      <input 
+                        type="text" 
+                        placeholder="Nama" 
+                        value={row.name} 
+                        disabled={isDisabled || teamObj}
+                        onChange={(e) => updateRow(row.id, 'name', e.target.value)} 
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (index === playerRows.length - 1) addRow();
+                          }
+                        }}
+                        className={clsx(
+                          "w-full bg-slate-900 border rounded-lg p-2.5 text-white text-sm outline-none transition",
+                          duplicateIds.has(row.id) ? "border-red-500 focus:ring-1 focus:ring-red-500" : "border-slate-600 focus:ring-1 focus:ring-emerald-500",
+                          (isDisabled || teamObj) && "opacity-60 cursor-not-allowed"
+                        )} 
+                      />
+                      {teamObj && (
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] bg-indigo-500/80 text-white px-2 py-0.5 rounded uppercase font-bold tracking-wider">{teamObj.name}</div>
+                      )}
+                    </div>
                     {isMarked && (
                       <select 
                         value={row.tier} 
                         onChange={(e) => updateRow(row.id, 'tier', e.target.value)}
-                        className="w-16 shrink-0 bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white font-bold text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                        disabled={isDisabled}
+                        className="w-16 shrink-0 bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white font-bold text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50"
                       >
                         {['A','B','C','D'].map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
@@ -294,32 +364,20 @@ export default function SetupView() {
                           <div className={clsx("absolute left-[2px] top-[2px] bg-white w-3 h-3 rounded-full transition-transform", !row.isInactive ? "translate-x-[16px]" : "")}></div>
                         </div>
                       </label>
-                      <button onClick={() => removeRow(row.id)} className="shrink-0 text-slate-500 hover:text-red-400 p-1.5 transition ml-1" title="Hapus Baris">
+                      <button onClick={() => removeRow(row.id)} disabled={isDisabled} className="shrink-0 text-slate-500 hover:text-red-400 p-1.5 transition ml-1 disabled:opacity-50" title="Hapus Baris">
                         <X className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })}
+            </div>
+            {!isDisabled && (
               <button onClick={addRow} className="mt-3 text-xs flex items-center justify-center w-full gap-1 p-2 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
                 <Plus className="w-4 h-4" /> Tambah Pemain
               </button>
-            </div>
-          ) : (
-            <div className="w-full fade-in">
-              <div className="text-xs font-normal text-slate-400 mb-3 bg-slate-800 p-3 rounded-lg border border-slate-700">
-                Format: <b className="text-emerald-400">{isMarked ? 'NAMA - MARKING' : 'NAMA'}</b><br/>
-                Contoh: <span className="font-mono text-amber-400">{isMarked ? 'Adi s - A' : 'Adi s'}</span>
-                <br/><span className="text-slate-500 mt-1 block">* Tambahkan [OFF] di akhir untuk set tidak aktif.</span>
-              </div>
-              <textarea 
-                rows="8" 
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white focus:ring-1 focus:ring-emerald-500 outline-none font-mono text-sm leading-relaxed hide-scrollbar"
-              />
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
       
@@ -362,6 +420,83 @@ export default function SetupView() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Team Modal */}
+      {showTeamModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm fade-in">
+          <div className="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl max-w-md w-full p-5 relative flex flex-col max-h-[85vh]">
+            <button onClick={() => setShowTeamModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white transition bg-slate-700/50 hover:bg-slate-600 rounded-full p-1.5 z-10">
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-700/50 pb-3 flex items-center gap-2">
+              <List className="w-5 h-5 text-indigo-400" />
+              Kelola Tim
+            </h3>
+
+            <div className="space-y-4 overflow-y-auto pr-1 pb-2 hide-scrollbar">
+              <div className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+                <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Buat Tim Baru</label>
+                <input 
+                  type="text" 
+                  placeholder="Nama Tim" 
+                  value={newTeamName} 
+                  onChange={e => setNewTeamName(e.target.value)} 
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none mb-2" 
+                />
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <select value={selectedP1} onChange={e => setSelectedP1(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg p-2 text-xs text-white outline-none">
+                    <option value="">Pemain 1</option>
+                    {playerRows.filter(p => p.name && !localTeams.some(t => t.playerIds.includes(p.id))).map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <select value={selectedP2} onChange={e => setSelectedP2(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg p-2 text-xs text-white outline-none">
+                    <option value="">Pemain 2</option>
+                    {playerRows.filter(p => p.name && !localTeams.some(t => t.playerIds.includes(p.id))).map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={createTeam} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded-lg transition text-xs shadow-lg shadow-indigo-900/30">
+                    Tambah Tim
+                  </button>
+                  <button onClick={autoAssignTeams} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg transition text-xs shadow">
+                    Auto Assign
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {localTeams.length === 0 ? (
+                  <div className="text-center text-xs text-slate-500 py-4">Belum ada tim yang dibuat.</div>
+                ) : (
+                  localTeams.map(t => {
+                    const p1 = playerRows.find(p => p.id === t.playerIds[0]);
+                    const p2 = playerRows.find(p => p.id === t.playerIds[1]);
+                    return (
+                      <div key={t.id} className="bg-slate-800 border border-slate-600 rounded-xl p-3 flex justify-between items-center">
+                        <div>
+                          <div className="font-bold text-sm text-indigo-400">{t.name}</div>
+                          <div className="text-xs text-slate-300">{p1?.name || '?'} & {p2?.name || '?'}</div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => editTeam(t)} className="text-slate-400 hover:text-indigo-400 bg-slate-900 p-1.5 rounded-lg transition" title="Edit Tim">
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => removeTeam(t.id)} className="text-slate-500 hover:text-red-400 bg-slate-900 p-1.5 rounded-lg transition" title="Hapus Tim">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         </div>

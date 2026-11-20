@@ -4,6 +4,8 @@ import SetupView from './components/SetupView';
 import ManagerView from './components/ManagerView';
 import { useTournamentStore } from './store/useTournamentStore';
 import { supabase } from './lib/supabaseClient';
+import ToastContainer from './components/ToastContainer';
+import { toast } from './store/useToastStore';
 
 function App() {
   const { currentView, loadFromSupabase } = useTournamentStore();
@@ -39,7 +41,7 @@ function App() {
               }
               await supabase.from('tournaments').update({ otp: null }).eq('id', id);
               window.history.replaceState({}, '', `${window.location.pathname}?id=${id}`);
-              alert("Akses Host Berhasil!");
+              toast.success("Akses Host Berhasil!");
             } else {
               setInvalidOtp(true);
               window.history.replaceState({}, '', `${window.location.pathname}?id=${id}`);
@@ -59,7 +61,8 @@ function App() {
   }
 
   return (
-    <div className="bg-slate-900 text-slate-200 h-[100dvh] flex flex-col overflow-hidden font-sans antialiased selection:bg-emerald-500/30">
+    <div className="min-h-[100dvh] bg-slate-900 text-slate-100 flex flex-col font-sans selection:bg-emerald-500/30 w-full overflow-x-hidden">
+      <ToastContainer />
       <Header />
       
       <main className="flex flex-1 overflow-hidden p-4 md:p-6 mx-auto w-full max-w-7xl gap-6 z-10 relative">

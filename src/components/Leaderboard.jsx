@@ -21,7 +21,7 @@ function getCourtStyle(courtId) {
 
 export default function Leaderboard() {
   const { currentView, getLeaderboardStats, config, customCourtNames } = useTournamentStore();
-  const { sortedPlayers, stats } = getLeaderboardStats();
+  const { leaderboardItems, stats } = getLeaderboardStats();
 
   const isSetup = currentView === 'setup';
   if (isSetup) return null;
@@ -46,12 +46,14 @@ export default function Leaderboard() {
             </tr>
           </thead>
           <tbody>
-            {sortedPlayers.map((p, index) => {
-              const s = stats[p.id];
-              const isPlaying = p.status === 'playing';
-              const isInactive = p.isWalkout;
+            {leaderboardItems.map((item, index) => {
+              const s = item.stats;
+              // playing status is true if ANY player in team is playing
+              const isPlaying = item.players.some(p => p.status === 'playing');
+              const isInactive = item.isWalkout;
               const hasStreak = s.streak >= 3;
-              const cName = customCourtNames[p.court] || `L${p.court}`;
+              const pCourt = item.players.find(p => p.status === 'playing')?.court;
+              const cName = pCourt ? (customCourtNames[pCourt] || `L${pCourt}`) : null;
 
               let medal = null;
               if (index === 0 && !isInactive) medal = "text-yellow-400";
@@ -59,18 +61,23 @@ export default function Leaderboard() {
               if (index === 2 && !isInactive) medal = "text-amber-600";
 
               return (
-                <tr key={p.id} className={clsx("border-b border-slate-700 hover:bg-slate-800 transition", isInactive && "opacity-50")}>
+                <tr key={item.id} className={clsx("border-b border-slate-700 hover:bg-slate-800 transition", isInactive && "opacity-50")}>
                   <td className="px-3 py-4 text-center text-slate-500 font-bold text-xs w-10">
                     {medal ? <Medal className={`w-4 h-4 mx-auto ${medal}`} /> : index + 1}
                   </td>
                   <td className="pl-2 pr-3 py-4 flex flex-wrap items-center w-full">
                     {isInactive && <span className="bg-red-900/50 text-red-400 border border-red-700/50 text-[9px] px-1.5 py-0.5 rounded font-bold mr-2 tracking-wider shrink-0 mb-1">OFF</span>}
-                    {showMarking && p.tier !== '-' && <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-bold mr-2 shrink-0 mb-1 ${getTierStyle(p.tier)}`}>{p.tier}</span>}
-                    <span className={clsx("break-words flex-grow min-w-0 mr-1", isPlaying ? "font-bold text-white" : "text-slate-300 font-medium", isInactive && "line-through decoration-slate-500")}>
-                      {p.name}
-                    </span>
+                    {!item.isTeam && showMarking && item.players[0].tier !== '-' && <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-bold mr-2 shrink-0 mb-1 ${getTierStyle(item.players[0].tier)}`}>{item.players[0].tier}</span>}
+                    <div className={clsx("flex flex-col min-w-0 mr-1", isPlaying ? "font-bold text-white" : "text-slate-300 font-medium", isInactive && "line-through decoration-slate-500")}>
+                      <span className="break-words">{item.name}</span>
+                      {item.isTeam && (
+                        <span className="text-[10px] text-slate-500 font-normal mt-0.5 break-words">
+                          {item.players.map(p => p.name).join(' & ')}
+                        </span>
+                      )}
+                    </div>
                     {hasStreak && !isInactive && <Flame className="w-4 h-4 text-orange-500 fill-orange-500 animate-pulse ml-1 shrink-0" />}
-                    {isPlaying && !isInactive && <span className={`text-[9px] px-1.5 py-0.5 rounded ml-1 shadow-sm border shrink-0 mt-1 md:mt-0 ${getCourtStyle(p.court)}`}>{cName}</span>}
+                    {isPlaying && !isInactive && cName && <span className={`text-[9px] px-1.5 py-0.5 rounded ml-1 shadow-sm border shrink-0 mt-1 md:mt-0 ${getCourtStyle(pCourt)}`}>{cName}</span>}
                   </td>
                   <td className="px-2 py-4 text-center text-slate-400 font-mono text-[13px]">{s.games}</td>
                   <td className="px-2 py-4 text-center text-slate-300 font-mono text-[13px] whitespace-nowrap">{s.wins}-{s.losses}-{s.ties}</td>

@@ -3,6 +3,36 @@ import { supabase } from '../lib/supabaseClient';
 
 let syncTimeout = null;
 
+const draftCourtEntities = (entities) => {
+  let resultIndices = [];
+  
+  const dfs = (index, currentSum, currentIndices) => {
+    if (currentSum === 4) {
+      resultIndices = [...currentIndices];
+      return true;
+    }
+    if (currentSum > 4 || index >= entities.length) return false;
+    
+    currentIndices.push(index);
+    if (dfs(index + 1, currentSum + entities[index].players.length, currentIndices)) return true;
+    
+    currentIndices.pop();
+    if (dfs(index + 1, currentSum, currentIndices)) return true;
+    
+    return false;
+  };
+  
+  if (dfs(0, 0, [])) {
+    let selected = [];
+    for (let i = resultIndices.length - 1; i >= 0; i--) {
+      selected.unshift(entities[resultIndices[i]]);
+      entities.splice(resultIndices[i], 1);
+    }
+    return selected;
+  }
+  return null;
+};
+
 function gcd(a, b) {
   return b === 0 ? a : gcd(b, a % b);
 }
@@ -34,6 +64,7 @@ export const useTournamentStore = create((set, get) => ({
   numCourts: 1,
   customCourtNames: {},
   players: [], // { id, name, tier, isWalkout, status, court }
+  teams: [],
   matches: {}, // rX-cY: { round, court, t1: [], t2: [], score1, score2 }
   currentRound: 0,
   playerIdCounter: 1,
@@ -70,6 +101,7 @@ export const useTournamentStore = create((set, get) => ({
         numCourts: finalState.numCourts,
         customCourtNames: finalState.customCourtNames,
         players: finalState.players,
+        teams: finalState.teams,
         matches: finalState.matches,
         currentRound: finalState.currentRound,
         playerIdCounter: finalState.playerIdCounter,
@@ -105,6 +137,7 @@ export const useTournamentStore = create((set, get) => ({
           numCourts: data.state.numCourts,
           customCourtNames: data.state.customCourtNames,
           players: data.state.players,
+          teams: data.state.teams || [],
           matches: data.state.matches,
           currentRound: data.state.currentRound,
           playerIdCounter: data.state.playerIdCounter,
@@ -141,10 +174,12 @@ export const useTournamentStore = create((set, get) => ({
     }
   },
 
-  startTournament: async (parsedPlayers, newNumCourts, newConfig, newCourtNames) => {
+  startTournament: async (parsedPlayers, newNumCourts, newConfig, newCourtNames, teams) => {
     const state = get();
     let newPlayerId = state.playerIdCounter;
     let newPlayersArray = [];
+
+    let tempToRealId = {};
 
     parsedPlayers.forEach((data) => {
       if (data.pid) {
@@ -156,12 +191,9 @@ export const useTournamentStore = create((set, get) => ({
           if (p.isWalkout) {
             p.status = 'rest';
             p.court = null;
-            // Remove from current round matches if playing
-            if (state.currentRound > 0) {
-              // We'll handle match updates immutably below
-            }
           }
           newPlayersArray.push({ ...p });
+          tempToRealId[data.tempId] = p.id;
         }
       } else {
         let p = state.players.find((x) => x.name.toLowerCase() === data.name.toLowerCase());
@@ -173,20 +205,22 @@ export const useTournamentStore = create((set, get) => ({
             p.court = null;
           }
           newPlayersArray.push({ ...p });
+          tempToRealId[data.tempId] = p.id;
         } else {
           newPlayersArray.push({
-            id: newPlayerId++,
+            id: newPlayerId,
             name: data.name,
             tier: data.tier,
             status: 'rest',
             court: null,
             isWalkout: data.isInactive,
           });
+          tempToRealId[data.tempId] = newPlayerId;
+          newPlayerId++;
         }
       }
     });
 
-    // Keep existing players that are not in the new parsed data but mark them as walkout
     if (state.isTournamentStarted) {
       state.players.forEach((oldP) => {
         if (!newPlayersArray.find((nP) => nP.id === oldP.id)) {
@@ -195,7 +229,6 @@ export const useTournamentStore = create((set, get) => ({
       });
     }
 
-    // Clean up matches if anyone walked out during current round
     let nextMatches = { ...state.matches };
     if (state.currentRound > 0) {
       Object.keys(nextMatches).forEach((key) => {
@@ -208,11 +241,18 @@ export const useTournamentStore = create((set, get) => ({
       });
     }
 
+    let realTeams = (teams || []).map(t => ({
+       id: t.id,
+       name: t.name,
+       playerIds: [ tempToRealId[t.playerIds[0]], tempToRealId[t.playerIds[1]] ]
+    })).filter(t => t.playerIds[0] !== undefined && t.playerIds[1] !== undefined);
+
     set({
       config: { ...state.config, ...newConfig },
       numCourts: newNumCourts,
       customCourtNames: newCourtNames,
       players: newPlayersArray,
+      teams: realTeams,
       playerIdCounter: newPlayerId,
       matches: nextMatches,
       currentView: 'manager',
@@ -225,11 +265,9 @@ export const useTournamentStore = create((set, get) => ({
       updatedState.generateNextRound();
     }
 
-    // Save to Supabase initially
     const finalState = get();
     const now = new Date().toISOString();
     
-    // We update Zustand with dates before saving
     set({ createdAt: now, lastModified: now });
     const stateWithDates = get();
 
@@ -238,6 +276,7 @@ export const useTournamentStore = create((set, get) => ({
       numCourts: stateWithDates.numCourts,
       customCourtNames: stateWithDates.customCourtNames,
       players: stateWithDates.players,
+      teams: stateWithDates.teams,
       matches: stateWithDates.matches,
       currentRound: stateWithDates.currentRound,
       playerIdCounter: stateWithDates.playerIdCounter,
@@ -270,7 +309,6 @@ export const useTournamentStore = create((set, get) => ({
           courtsCount: stateWithDates.numCourts
         };
         let history = JSON.parse(localStorage.getItem('padel_history') || '[]');
-        // remove existing with same ID if any, then add to top
         history = history.filter(h => h.id !== data[0].id);
         history.unshift(historyItem);
         localStorage.setItem('padel_history', JSON.stringify(history));
@@ -279,44 +317,8 @@ export const useTournamentStore = create((set, get) => ({
     }
   },
 
-  generateNextRound: () => {
+  draftCourts: (availablePlayers, currentStats, courtsToDraft, teams) => {
     const state = get();
-    const nextRound = state.currentRound + 1;
-    
-    let updatedPlayers = state.players.map((p) => {
-      if (!p.isWalkout) {
-        return { ...p, status: 'rest', court: null };
-      }
-      return p;
-    });
-
-    let availablePlayers = updatedPlayers.filter((p) => !p.isWalkout);
-    let currentStats = {};
-    availablePlayers.forEach((p) => {
-      currentStats[p.id] = { games: 0, points: 0, wins: 0, diff: 0 };
-    });
-
-    Object.values(state.matches).forEach((m) => {
-      if (m.score1 !== null && m.score2 !== null) {
-        m.t1.forEach((id) => {
-          if (currentStats[id]) {
-            currentStats[id].games++;
-            currentStats[id].points += m.score1;
-            currentStats[id].diff += m.score1 - m.score2;
-            if (m.score1 > m.score2) currentStats[id].wins++;
-          }
-        });
-        m.t2.forEach((id) => {
-          if (currentStats[id]) {
-            currentStats[id].games++;
-            currentStats[id].points += m.score2;
-            currentStats[id].diff += m.score2 - m.score1;
-            if (m.score2 > m.score1) currentStats[id].wins++;
-          }
-        });
-      }
-    });
-
     let sortedForDraft = [...availablePlayers].sort((a, b) => {
       let sA = currentStats[a.id], sB = currentStats[b.id];
       if (sA.games !== sB.games) return sA.games - sB.games;
@@ -325,37 +327,98 @@ export const useTournamentStore = create((set, get) => ({
       return sB.diff - sA.diff;
     });
 
-    let draftedPlayers = sortedForDraft.slice(0, state.numCourts * 4);
+    let entities = [];
+    let handledPlayers = new Set();
+    
+    (teams || []).forEach(t => {
+       let p1 = sortedForDraft.find(p => p.id === t.playerIds[0]);
+       let p2 = sortedForDraft.find(p => p.id === t.playerIds[1]);
+       if (p1 && p2) {
+          entities.push({
+             isTeam: true,
+             teamId: t.id,
+             players: [p1, p2],
+             rank: sortedForDraft.indexOf(p1) + sortedForDraft.indexOf(p2)
+          });
+          handledPlayers.add(p1.id);
+          handledPlayers.add(p2.id);
+       }
+    });
 
-    if (state.config.type.includes('marked') || nextRound <= 3) {
-      const tierVal = { A: 4, B: 3, C: 2, D: 1 };
-      draftedPlayers.sort((a, b) => (tierVal[b.tier] || 0) - (tierVal[a.tier] || 0));
-    } else {
-      draftedPlayers.sort((a, b) => {
-        let sA = currentStats[a.id], sB = currentStats[b.id];
-        return sB.points - sA.points;
-      });
+    sortedForDraft.forEach(p => {
+       if (!handledPlayers.has(p.id)) {
+          entities.push({
+             isTeam: false,
+             players: [p],
+             rank: sortedForDraft.indexOf(p)
+          });
+       }
+    });
+
+    entities.sort((a, b) => a.rank - b.rank);
+
+    let draftedCourts = [];
+    for (let c = 0; c < courtsToDraft; c++) {
+        let selected = draftCourtEntities(entities);
+        if (!selected) break;
+
+        let courtPlayers = { t1: [], t2: [] };
+        if (selected.length === 2) {
+            courtPlayers.t1 = selected[0].players.map(p => p.id);
+            courtPlayers.t2 = selected[1].players.map(p => p.id);
+        } else if (selected.length === 3) {
+            let team = selected.find(e => e.isTeam);
+            let solos = selected.filter(e => !e.isTeam);
+            courtPlayers.t1 = team.players.map(p => p.id);
+            courtPlayers.t2 = [solos[0].players[0].id, solos[1].players[0].id];
+        } else if (selected.length === 4) {
+            let solos = selected.map(e => e.players[0]);
+            if (state.config.type.includes('marked')) {
+               const tierVal = { A: 4, B: 3, C: 2, D: 1 };
+               solos.sort((a, b) => (tierVal[b.tier] || 0) - (tierVal[a.tier] || 0));
+            } else {
+               solos.sort((a, b) => currentStats[b.id].points - currentStats[a.id].points);
+            }
+            courtPlayers.t1 = [solos[0].id, solos[2].id];
+            courtPlayers.t2 = [solos[1].id, solos[3].id];
+        }
+        draftedCourts.push(courtPlayers);
     }
+    return draftedCourts;
+  },
 
+  generateNextRound: () => {
+    const state = get();
+    const nextRound = state.currentRound + 1;
+    
+    let updatedPlayers = state.players.map((p) => {
+      if (!p.isWalkout) return { ...p, status: 'rest', court: null };
+      return p;
+    });
+
+    let availablePlayers = updatedPlayers.filter((p) => !p.isWalkout);
+    const { stats } = state.getLeaderboardStats();
+
+    let draftedCourts = get().draftCourts(availablePlayers, stats, state.numCourts, state.teams);
     let nextMatches = { ...state.matches };
 
-    for (let i = 0; i < state.numCourts; i++) {
+    for (let i = 0; i < draftedCourts.length; i++) {
       let courtId = i + 1;
-      let cPlayers = draftedPlayers.slice(i * 4, (i + 1) * 4);
-      if (cPlayers.length < 4) break;
+      let cMatch = draftedCourts[i];
 
       let matchKey = `r${nextRound}-c${courtId}`;
       nextMatches[matchKey] = {
         round: nextRound,
         court: courtId,
-        t1: [cPlayers[0].id, cPlayers[2].id],
-        t2: [cPlayers[1].id, cPlayers[3].id],
+        t1: cMatch.t1,
+        t2: cMatch.t2,
         score1: null,
         score2: null,
+        timestamp: Date.now()
       };
 
-      cPlayers.forEach((cp) => {
-        let pIndex = updatedPlayers.findIndex((p) => p.id === cp.id);
+      [...cMatch.t1, ...cMatch.t2].forEach((id) => {
+        let pIndex = updatedPlayers.findIndex((p) => p.id === id);
         if (pIndex !== -1) {
           updatedPlayers[pIndex].status = 'playing';
           updatedPlayers[pIndex].court = courtId;
@@ -394,19 +457,7 @@ export const useTournamentStore = create((set, get) => ({
     set({ matches: { ...state.matches, [matchKey]: newMatch } });
     get().syncToSupabase();
 
-    // Auto-advance only for lagging courts (Dynamic mode)
-    if (scoreVal !== null && newMatch.score1 !== null && newMatch.score2 !== null) {
-      const latestState = get();
-      if (newMatch.round < latestState.currentRound) {
-        setTimeout(() => {
-          const checkState = get();
-          const checkMatch = checkState.matches[matchKey];
-          if (checkMatch && checkMatch.score1 !== null && checkMatch.score2 !== null) {
-            checkState.generateMatchForCourt(checkMatch.court);
-          }
-        }, 800);
-      }
-    }
+    // Auto-advance is disabled. Users must click Generate Next Round manually.
   },
 
   generateMatchForCourt: (courtId) => {
@@ -424,24 +475,11 @@ export const useTournamentStore = create((set, get) => ({
     if (availablePlayers.length < 4) return;
 
     const { stats } = state.getLeaderboardStats();
+    let draftedCourts = get().draftCourts(availablePlayers, stats, 1, state.teams);
 
-    let sortedForDraft = [...availablePlayers].sort((a, b) => {
-      let sA = stats[a.id], sB = stats[b.id];
-      if (sA.games !== sB.games) return sA.games - sB.games;
-      if (sB.totalPts !== sA.totalPts) return sB.totalPts - sA.totalPts;
-      if (sB.wins !== sA.wins) return sB.wins - sA.wins;
-      return sB.diff - sA.diff;
-    });
+    if (draftedCourts.length === 0) return;
 
-    let cPlayers = sortedForDraft.slice(0, 4);
-
-    if (state.config.type.includes('marked')) {
-      const tierVal = { A: 4, B: 3, C: 2, D: 1 };
-      cPlayers.sort((a, b) => (tierVal[b.tier] || 0) - (tierVal[a.tier] || 0));
-    } else {
-      cPlayers.sort((a, b) => stats[b.id].totalPts - stats[a.id].totalPts);
-    }
-
+    let cMatch = draftedCourts[0];
     let nextMatches = { ...state.matches };
     let courtMatches = Object.values(state.matches).filter(m => m.court === courtId);
     let nextRound = courtMatches.length + 1;
@@ -450,15 +488,15 @@ export const useTournamentStore = create((set, get) => ({
     nextMatches[matchId] = {
       round: nextRound,
       court: courtId,
-      t1: [cPlayers[0].id, cPlayers[2].id],
-      t2: [cPlayers[1].id, cPlayers[3].id],
+      t1: cMatch.t1,
+      t2: cMatch.t2,
       score1: null,
       score2: null,
       timestamp: Date.now()
     };
 
-    cPlayers.forEach(cp => {
-      let pIndex = updatedPlayers.findIndex(p => p.id === cp.id);
+    [...cMatch.t1, ...cMatch.t2].forEach(id => {
+      let pIndex = updatedPlayers.findIndex(p => p.id === id);
       if (pIndex !== -1) {
         updatedPlayers[pIndex].status = 'playing';
         updatedPlayers[pIndex].court = courtId;
@@ -507,36 +545,58 @@ export const useTournamentStore = create((set, get) => ({
     }
   },
 
-  executeSwap: (matchKey, selectedSlot, newPlayerId) => {
+  executeSwap: (matchKey, selectedSlot, newEntity) => {
     const state = get();
     let nextMatches = { ...state.matches };
     let m = { ...nextMatches[matchKey] };
 
-    // Remove newPlayerId from any active match
+    let pIds = newEntity.type === 'team' ? [newEntity.p1, newEntity.p2] : [newEntity.id];
+
+    // Remove these players from any active match
     Object.keys(nextMatches).forEach((k) => {
       let rm = { ...nextMatches[k] };
       if (rm.score1 === null || rm.score2 === null) {
         let changed = false;
-        if (rm.t1.includes(newPlayerId)) {
-          rm.t1 = rm.t1.map((id) => (id === newPlayerId ? null : id));
-          changed = true;
-        }
-        if (rm.t2.includes(newPlayerId)) {
-          rm.t2 = rm.t2.map((id) => (id === newPlayerId ? null : id));
-          changed = true;
-        }
+        pIds.forEach(pid => {
+          if (rm.t1.includes(pid)) {
+            rm.t1 = rm.t1.map((id) => (id === pid ? null : id));
+            changed = true;
+          }
+          if (rm.t2.includes(pid)) {
+            rm.t2 = rm.t2.map((id) => (id === pid ? null : id));
+            changed = true;
+          }
+        });
         if (changed) nextMatches[k] = rm;
       }
     });
 
-    // Assign to selected slot
-    if (selectedSlot.team === 1) {
-      m.t1 = [...m.t1];
-      m.t1[selectedSlot.index] = newPlayerId;
-    } else {
-      m.t2 = [...m.t2];
-      m.t2[selectedSlot.index] = newPlayerId;
+    let targetSide = selectedSlot.team === 1 ? m.t1 : m.t2;
+    let existingP1 = targetSide[0];
+    let existingP2 = targetSide[1];
+    
+    let isOccupiedByTeam = false;
+    if (existingP1 !== null && existingP2 !== null) {
+       isOccupiedByTeam = (state.teams || []).some(t => 
+         (t.playerIds[0] === existingP1 && t.playerIds[1] === existingP2) ||
+         (t.playerIds[0] === existingP2 && t.playerIds[1] === existingP1)
+       );
     }
+
+    if (newEntity.type === 'team') {
+       targetSide = [newEntity.p1, newEntity.p2];
+    } else {
+       if (isOccupiedByTeam) {
+          targetSide = targetSide.map((_, idx) => idx === selectedSlot.index ? newEntity.id : null);
+       } else {
+          targetSide = [...targetSide];
+          targetSide[selectedSlot.index] = newEntity.id;
+       }
+    }
+
+    if (selectedSlot.team === 1) m.t1 = targetSide;
+    else m.t2 = targetSide;
+    
     nextMatches[matchKey] = m;
 
     // Recalculate player statuses
@@ -623,6 +683,58 @@ export const useTournamentStore = create((set, get) => ({
       s.totalPts = s.points + s.wins * state.config.bonus + s.rests * state.config.restBonus;
     });
 
+    let leaderboardItems = [];
+    let handledPlayers = new Set();
+    
+    (state.teams || []).forEach(t => {
+       let p1 = state.players.find(p => p.id === t.playerIds[0]);
+       let p2 = state.players.find(p => p.id === t.playerIds[1]);
+       if (p1 && p2) {
+          leaderboardItems.push({
+             isTeam: true,
+             id: t.id,
+             name: t.name,
+             stats: stats[p1.id],
+             players: [p1, p2],
+             sortVal: stats[p1.id].totalPts,
+             isWalkout: p1.isWalkout || p2.isWalkout
+          });
+          handledPlayers.add(p1.id);
+          handledPlayers.add(p2.id);
+       }
+    });
+
+    state.players.forEach(p => {
+       if (!handledPlayers.has(p.id)) {
+          leaderboardItems.push({
+             isTeam: false,
+             id: p.id,
+             name: p.name,
+             tier: p.tier,
+             isWalkout: p.isWalkout,
+             stats: stats[p.id],
+             players: [p],
+             sortVal: stats[p.id].totalPts
+          });
+       }
+    });
+
+    leaderboardItems.sort((a, b) => {
+      if (a.isWalkout && !b.isWalkout) return 1;
+      if (!a.isWalkout && b.isWalkout) return -1;
+
+      let sA = a.stats, sB = b.stats;
+      if (state.config.sort === 'points') {
+        if (sB.totalPts !== sA.totalPts) return sB.totalPts - sA.totalPts;
+        if (sB.wins !== sA.wins) return sB.wins - sA.wins;
+        return sB.diff - sA.diff;
+      } else {
+        if (sB.wins !== sA.wins) return sB.wins - sA.wins;
+        if (sB.totalPts !== sA.totalPts) return sB.totalPts - sA.totalPts;
+        return sB.diff - sA.diff;
+      }
+    });
+
     let sortedPlayers = [...state.players].sort((a, b) => {
       if (a.isWalkout && !b.isWalkout) return 1;
       if (!a.isWalkout && b.isWalkout) return -1;
@@ -639,7 +751,7 @@ export const useTournamentStore = create((set, get) => ({
       }
     });
 
-    return { sortedPlayers, stats };
+    return { sortedPlayers, stats, leaderboardItems };
   },
 
   getBalanceText: () => {
