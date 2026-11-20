@@ -450,37 +450,25 @@ export default function SetupView() {
         {/* Player Input with Bulk Sync */}
         <div className="bg-slate-700/30 p-4 md:p-5 rounded-xl border border-slate-600 flex flex-col min-w-0 mb-6">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-            <div className="flex items-center gap-3">
-              <label className="block text-sm font-bold text-slate-400 shrink-0">Data Pemain & Team</label>
-              
-              {/* Mode Switcher */}
-              <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-600">
-                <button
-                  type="button"
-                  onClick={() => switchInputMode('row')}
-                  className={clsx(
-                    "flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition",
-                    inputMode === 'row' ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"
-                  )}
-                >
-                  <List className="w-3.5 h-3.5" /> Baris
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchInputMode('bulk')}
-                  className={clsx(
-                    "flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition",
-                    inputMode === 'bulk' ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"
-                  )}
-                >
-                  <FileText className="w-3.5 h-3.5" /> Sekaligus (Bulk)
-                </button>
-              </div>
+            <label className="block text-sm font-bold text-slate-400 shrink-0">Data Pemain & Team</label>
+            <div className="flex items-center gap-2">
+              <button 
+                type="button"
+                onClick={() => switchInputMode(inputMode === 'bulk' ? 'row' : 'bulk')} 
+                className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0"
+              >
+                {inputMode === 'bulk' ? <List className="w-4 h-4 text-emerald-400" /> : <FileText className="w-4 h-4 text-blue-400" />}
+                {inputMode === 'bulk' ? 'Mode Baris' : 'Bulk Input'}
+              </button>
+              <button 
+                type="button"
+                onClick={() => setShowTeamModal(true)} 
+                disabled={isDisabled} 
+                className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4"/> Set Team
+              </button>
             </div>
-
-            <button onClick={() => setShowTeamModal(true)} disabled={isDisabled} className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0 disabled:opacity-50">
-              <Plus className="w-4 h-4"/> Set Team
-            </button>
           </div>
           
           {inputMode === 'row' ? (
