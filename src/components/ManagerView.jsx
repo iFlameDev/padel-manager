@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useTournamentStore } from '../store/useTournamentStore';
 import clsx from 'clsx';
 import { Check, Edit3, LayoutList, CalendarDays } from 'lucide-react';
@@ -21,7 +21,7 @@ export default function ManagerView() {
   const { 
     currentView, config, numCourts, customCourtNames, players, teams,
     matches, currentRound, activeRoundTab, setActiveRoundTab,
-    getBalanceText, triggerNextRound, isHost
+    getBalanceText, triggerNextRound, isHost, showBadges
   } = useTournamentStore();
 
   const [managerTab, setManagerTab] = useState('rounds'); // 'rounds' or 'leaderboard'
@@ -32,31 +32,13 @@ export default function ManagerView() {
 
   const rounds = Array.from({ length: currentRound }, (_, i) => i + 1);
   const activeMatches = Object.values(matches).filter(m => m.round === activeRoundTab);
-  const showMarking = config.type.includes('marked');
+  const showMarking = config.type.includes('marked') && showBadges;
   const activeCount = players.filter(p => !p.isWalkout).length;
 
-  let latestMatches = {};
-  for (let i = 1; i <= numCourts; i++) {
-     let courtMatches = Object.values(matches).filter(m => m.court === i);
-     if (courtMatches.length > 0) {
-        latestMatches[i] = courtMatches.reduce((max, m) => m.round > max.round ? m : max, courtMatches[0]);
-     }
-  }
-
-  let readyCourts = [];
-  for (let i = 1; i <= numCourts; i++) {
-     let lm = latestMatches[i];
-     if (lm && lm.score1 !== null && lm.score2 !== null) {
-        readyCourts.push(i);
-     }
-  }
-  
   const hasFinishedButNoNextRound = activeMatches.some(m => {
     if (m.score1 === null || m.score2 === null) return false;
     return !Object.values(matches).some(nm => nm.court === m.court && nm.round > activeRoundTab);
   });
-  
-  const isLatestRoundTab = activeRoundTab === currentRound;
   
   return (
     <div className="w-full flex flex-col h-full fade-in relative bg-slate-900">
@@ -159,7 +141,7 @@ export default function ManagerView() {
                     ) : null;
 
                     const courtHasNext = Object.values(matches).some(nm => nm.court === m.court && nm.round > activeRoundTab);
-                    const isLocked = config.type.includes('mexicano') && courtHasNext;
+                    const isLocked = courtHasNext;
 
                     const s1 = m.score1 !== null ? String(m.score1).padStart(2,'0') : '00';
                     const s2 = m.score2 !== null ? String(m.score2).padStart(2,'0') : '00';
@@ -181,7 +163,7 @@ export default function ManagerView() {
                       }
                     }
 
-                    const renderTier = (tier) => showMarking && tier !== '-' ? (
+                    const renderTier = (tier) => (showMarking && tier !== '-') ? (
                       <span className={clsx("text-[8px] px-1 py-0.5 rounded border font-mono", getTierStyle(tier))}>{tier}</span>
                     ) : null;
 

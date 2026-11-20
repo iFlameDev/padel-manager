@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTournamentStore } from '../store/useTournamentStore';
-import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { toast } from '../store/useToastStore';
@@ -15,31 +15,67 @@ function getTierStyle(tier) {
   }
 }
 
-export default function SwapModal({ isOpen, matchKey, onClose }) {
-  const { matches, players, teams, customCourtNames, executeSwap, config, isHost } = useTournamentStore();
-  const showMarking = config.type.includes('marked');
-  const [selectedSlot, setSelectedSlot] = useState(null); // { team: 1|2, index: 0|1 }
-  const [lastSwappedSlot, setLastSwappedSlot] = useState(null); // String representation to animate
+function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, selectedSlot, lastSwappedSlot, showMarking, onSelect }) {
+  const isSelected = selectedSlot?.team === team && selectedSlot?.index === index;
+  const isAnimating = lastSwappedSlot === `${team}-${index}`;
+  
+  let pStats = 0;
+  if (playerObj) {
+    pStats = Object.values(matches).reduce((acc, mx) => acc + (mx.score1 !== null && (mx.t1.includes(playerObj.id) || mx.t2.includes(playerObj.id)) ? 1 : 0), 0);
+  }
 
-  useEffect(() => {
-    if (!isOpen) {
-      setSelectedSlot(null);
-      setLastSwappedSlot(null);
-    }
-  }, [isOpen]);
+  return (
+    <motion.button
+      animate={isAnimating ? { 
+        scale: [1, 1.1, 1], 
+        backgroundColor: ["#1e293b", "#059669", "#1e293b"],
+        boxShadow: ["0px 0px 0px rgba(16,185,129,0)", "0px 0px 20px rgba(16,185,129,0.8)", "0px 0px 0px rgba(16,185,129,0)"],
+        y: [0, -5, 0]
+      } : {}}
+      transition={{ duration: 0.6, ease: "easeInOut" }}
+      onClick={() => onSelect({ team, index })}
+      className={clsx(
+        "w-full py-3 px-3 rounded-xl text-center text-[13px] font-bold transition border",
+        isSelected ? "bg-emerald-600/90 border-emerald-400 text-white ring-2 ring-emerald-300" : "bg-slate-800 border-slate-600/80 text-slate-300 hover:bg-slate-700 hover:border-slate-500",
+        teamObj ? "h-[100px] flex flex-col justify-center items-center gap-1 border-indigo-700/50 bg-indigo-900/20" : ""
+      )}
+    >
+      {teamObj ? (
+        <>
+          <div className="text-[14px] text-indigo-400 mb-1 uppercase tracking-wider">{teamObj.name}</div>
+          <div className="text-[11px] font-medium text-slate-300">{teamPlayers[0]?.name || '?'}</div>
+          <div className="text-[11px] font-medium text-slate-300">{teamPlayers[1]?.name || '?'}</div>
+        </>
+      ) : playerObj ? (
+        <div className="flex items-center justify-center gap-1.5">
+          {showMarking && playerObj.tier !== '-' && (
+            <span className={clsx("text-[9px] px-1 py-0.5 rounded border font-mono", getTierStyle(playerObj.tier))}>{playerObj.tier}</span>
+          )}
+          <span className="truncate max-w-[100px]">{playerObj.name}</span>
+          <span className="text-[10px] text-slate-400 font-normal ml-1">({pStats})</span>
+        </div>
+      ) : (
+        <div className="opacity-50 font-bold text-sm my-auto text-slate-500">Kosong</div>
+      )}
+    </motion.button>
+  );
+}
+
+export default function SwapModal({ isOpen, matchKey, onClose }) {
+  const { matches, players, teams, customCourtNames, executeSwap, config, showBadges } = useTournamentStore();
+  const showMarking = config.type.includes('marked') && showBadges;
+  const [selectedSlot, setSelectedSlot] = useState(null); // { team: 1|2, index: 0|1 }
+  const [lastSwappedSlot, setLastSwappedSlot] = useState(null);
+
+  const handleClose = () => {
+    setSelectedSlot(null);
+    setLastSwappedSlot(null);
+    onClose();
+  };
 
   if (!isOpen || !matchKey) return null;
 
-  let m = null;
-  let matchKeyFinal = null;
-  for (let roundKey in matchesByRound) {
-    if (matchesByRound[roundKey][matchKey]) {
-      m = matchesByRound[roundKey][matchKey];
-      matchKeyFinal = matchKey;
-      break;
-    }
-  }
-
+  const m = matches[matchKey];
   if (!m) return null;
 
   const team1Obj = (m.t1[0] && m.t1[1]) ? (teams || []).find(t => 
@@ -65,7 +101,7 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
   const currentPlayersInMatch = [...m.t1, ...m.t2].filter(id => id !== null);
   
   let currentStats = {};
-  players.forEach(p => { currentStats[p.id] = { games: 0 }; });
+  players.forEach(pl => { currentStats[pl.id] = { games: 0 }; });
   Object.values(matches).forEach(mx => {
     if (mx.score1 !== null && mx.score2 !== null) {
       mx.t1.forEach(id => { if (currentStats[id]) currentStats[id].games++; });
@@ -78,38 +114,38 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
   let availableEntities = [];
 
   (teams || []).forEach(t => {
-     let p1 = players.find(p => p.id === t.playerIds[0]);
-     let p2 = players.find(p => p.id === t.playerIds[1]);
-     if (p1 && p2 && !p1.isWalkout && !p2.isWalkout) {
-        if (!currentPlayersInMatch.includes(p1.id) && !currentPlayersInMatch.includes(p2.id)) {
-           availableEntities.push({
-              type: 'team',
-              id: t.id,
-              name: t.name,
-              p1: p1.id,
-              p2: p2.id,
-              p1Name: p1.name,
-              p2Name: p2.name,
-              games: currentStats[p1.id] ? currentStats[p1.id].games : 0,
-              assignedCourt: (p1.status === 'playing' && p1.court !== m.court) ? p1.court : 0,
-              tier: p1.tier
-           });
-        }
-     }
+    let p1 = players.find(pl => pl.id === t.playerIds[0]);
+    let p2 = players.find(pl => pl.id === t.playerIds[1]);
+    if (p1 && p2 && !p1.isWalkout && !p2.isWalkout) {
+      if (!currentPlayersInMatch.includes(p1.id) && !currentPlayersInMatch.includes(p2.id)) {
+        availableEntities.push({
+          type: 'team',
+          id: t.id,
+          name: t.name,
+          p1: p1.id,
+          p2: p2.id,
+          p1Name: p1.name,
+          p2Name: p2.name,
+          games: currentStats[p1.id] ? currentStats[p1.id].games : 0,
+          assignedCourt: (p1.status === 'playing' && p1.court !== m.court) ? p1.court : 0,
+          tier: p1.tier
+        });
+      }
+    }
   });
 
   availablePlayersList.forEach(pl => {
-     const isTeamMember = (teams || []).some(t => t.playerIds.includes(pl.id));
-     if (!isTeamMember) {
-        availableEntities.push({
-           type: 'solo',
-           id: pl.id,
-           name: pl.name,
-           games: currentStats[pl.id] ? currentStats[pl.id].games : 0,
-           assignedCourt: (pl.status === 'playing' && pl.court !== m.court) ? pl.court : 0,
-           tier: pl.tier
-        });
-     }
+    const isTeamMember = (teams || []).some(t => t.playerIds.includes(pl.id));
+    if (!isTeamMember) {
+      availableEntities.push({
+        type: 'solo',
+        id: pl.id,
+        name: pl.name,
+        games: currentStats[pl.id] ? currentStats[pl.id].games : 0,
+        assignedCourt: (pl.status === 'playing' && pl.court !== m.court) ? pl.court : 0,
+        tier: pl.tier
+      });
+    }
   });
 
   const tierVal = { 'A': 1, 'B': 2, 'C': 3, 'D': 4 };
@@ -134,55 +170,9 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
     }, 500);
   };
 
-  const SlotButton = ({ playerObj, team, index, teamObj }) => {
-    const isSelected = selectedSlot?.team === team && selectedSlot?.index === index;
-    const isAnimating = lastSwappedSlot === `${team}-${index}`;
-    
-    let pStats = 0;
-    if (playerObj) {
-      pStats = Object.values(matches).reduce((acc, mx) => acc + (mx.score1 !== null && (mx.t1.includes(playerObj.id) || mx.t2.includes(playerObj.id)) ? 1 : 0), 0);
-    }
-
-    return (
-      <motion.button
-        animate={isAnimating ? { 
-          scale: [1, 1.1, 1], 
-          backgroundColor: ["#1e293b", "#059669", "#1e293b"], // slate-800 to emerald-600 to slate-800
-          boxShadow: ["0px 0px 0px rgba(16,185,129,0)", "0px 0px 20px rgba(16,185,129,0.8)", "0px 0px 0px rgba(16,185,129,0)"],
-          y: [0, -5, 0]
-        } : {}}
-        transition={{ duration: 0.6, ease: "easeInOut" }}
-        onClick={() => setSelectedSlot({ team, index })}
-        className={clsx(
-          "w-full py-3 px-3 rounded-xl text-center text-[13px] font-bold transition border",
-          isSelected ? "bg-emerald-600/90 border-emerald-400 text-white ring-2 ring-emerald-300" : "bg-slate-800 border-slate-600/80 text-slate-300 hover:bg-slate-700 hover:border-slate-500",
-          teamObj ? "h-[100px] flex flex-col justify-center items-center gap-1 border-indigo-700/50 bg-indigo-900/20" : ""
-        )}
-      >
-        {teamObj ? (
-          <>
-            <div className="text-[14px] text-indigo-400 mb-1 uppercase tracking-wider">{teamObj.name}</div>
-            <div className="text-[11px] font-medium text-slate-300">{p[team===1?0:2]?.name || '?'}</div>
-            <div className="text-[11px] font-medium text-slate-300">{p[team===1?1:3]?.name || '?'}</div>
-          </>
-        ) : playerObj ? (
-          <div className="flex items-center justify-center gap-1.5">
-            {showMarking && playerObj.tier !== '-' && (
-              <span className={clsx("text-[9px] px-1 py-0.5 rounded border font-mono", getTierStyle(playerObj.tier))}>{playerObj.tier}</span>
-            )}
-            <span className="truncate max-w-[100px]">{playerObj.name}</span>
-            <span className="text-[10px] text-slate-400 font-normal ml-1">({pStats})</span>
-          </div>
-        ) : (
-          <div className="opacity-50 font-bold text-sm my-auto text-slate-500">Kosong</div>
-        )}
-      </motion.button>
-    );
-  };
-
-  return (
+  const modalContent = (
     <AnimatePresence>
-      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 backdrop-blur-sm">
         <motion.div 
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -196,11 +186,40 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
           <div className="bg-slate-900/60 rounded-2xl border border-slate-700/50 p-3 mb-4 flex relative items-center gap-8 md:gap-10 shadow-inner">
             <div className="w-1/2 flex flex-col gap-3 justify-center">
               {team1Obj ? (
-                <SlotButton playerObj={null} team={1} index={0} teamObj={team1Obj} />
+                <SlotButton 
+                  playerObj={null} 
+                  team={1} 
+                  index={0} 
+                  teamObj={team1Obj} 
+                  teamPlayers={[p[0], p[1]]}
+                  matches={matches}
+                  selectedSlot={selectedSlot}
+                  lastSwappedSlot={lastSwappedSlot}
+                  showMarking={showMarking}
+                  onSelect={setSelectedSlot}
+                />
               ) : (
                 <>
-                  <SlotButton playerObj={p[0]} team={1} index={0} />
-                  <SlotButton playerObj={p[1]} team={1} index={1} />
+                  <SlotButton 
+                    playerObj={p[0]} 
+                    team={1} 
+                    index={0} 
+                    matches={matches}
+                    selectedSlot={selectedSlot}
+                    lastSwappedSlot={lastSwappedSlot}
+                    showMarking={showMarking}
+                    onSelect={setSelectedSlot}
+                  />
+                  <SlotButton 
+                    playerObj={p[1]} 
+                    team={1} 
+                    index={1} 
+                    matches={matches}
+                    selectedSlot={selectedSlot}
+                    lastSwappedSlot={lastSwappedSlot}
+                    showMarking={showMarking}
+                    onSelect={setSelectedSlot}
+                  />
                 </>
               )}
             </div>
@@ -209,11 +228,40 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
             
             <div className="w-1/2 flex flex-col gap-3 justify-center">
               {team2Obj ? (
-                <SlotButton playerObj={null} team={2} index={0} teamObj={team2Obj} />
+                <SlotButton 
+                  playerObj={null} 
+                  team={2} 
+                  index={0} 
+                  teamObj={team2Obj} 
+                  teamPlayers={[p[2], p[3]]}
+                  matches={matches}
+                  selectedSlot={selectedSlot}
+                  lastSwappedSlot={lastSwappedSlot}
+                  showMarking={showMarking}
+                  onSelect={setSelectedSlot}
+                />
               ) : (
                 <>
-                  <SlotButton playerObj={p[2]} team={2} index={0} />
-                  <SlotButton playerObj={p[3]} team={2} index={1} />
+                  <SlotButton 
+                    playerObj={p[2]} 
+                    team={2} 
+                    index={0} 
+                    matches={matches}
+                    selectedSlot={selectedSlot}
+                    lastSwappedSlot={lastSwappedSlot}
+                    showMarking={showMarking}
+                    onSelect={setSelectedSlot}
+                  />
+                  <SlotButton 
+                    playerObj={p[3]} 
+                    team={2} 
+                    index={1} 
+                    matches={matches}
+                    selectedSlot={selectedSlot}
+                    lastSwappedSlot={lastSwappedSlot}
+                    showMarking={showMarking}
+                    onSelect={setSelectedSlot}
+                  />
                 </>
               )}
             </div>
@@ -261,7 +309,7 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
           
           <div className="flex mt-auto shrink-0">
             <button 
-              onClick={onClose} 
+              onClick={handleClose} 
               disabled={m.t1.includes(null) || m.t2.includes(null)}
               className="w-full bg-slate-700/80 hover:bg-slate-600 text-white font-bold py-3.5 rounded-xl transition shadow border border-slate-600 tracking-wide disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -272,4 +320,6 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
       </div>
     </AnimatePresence>
   );
+
+  return createPortal(modalContent, document.body);
 }

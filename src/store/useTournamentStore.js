@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabaseClient';
 
-let syncTimeout = null;
+let saveTimeout = null;
 
 const draftCourtEntities = (entities) => {
   let resultIndices = [];
@@ -42,8 +41,9 @@ export const useTournamentStore = create((set, get) => ({
   currentView: 'setup', // 'setup', 'manager', 'config'
   viewMode: 'pager', // 'pager', 'list'
   activeRoundTab: 1,
+  showBadges: true, // Toggle visibility of Tier & Court badges
 
-  // Supabase State
+  // Tournament Identity (Offline)
   tournamentId: null,
   isHost: true,
   createdAt: null,
@@ -74,24 +74,25 @@ export const useTournamentStore = create((set, get) => ({
   setView: (view) => set({ currentView: view }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setActiveRoundTab: (tab) => set({ activeRoundTab: tab }),
+  toggleBadges: () => set((state) => ({ showBadges: !state.showBadges })),
 
   // --- ACTIONS: CONFIG & PLAYERS ---
   updateConfig: (updates) => {
     set((state) => ({ config: { ...state.config, ...updates } }));
-    get().syncToSupabase();
+    get().saveToHistory();
   },
   setNumCourts: (num) => set({ numCourts: num }),
   setCustomCourtNames: (names) => set({ customCourtNames: names }),
   setPlayers: (players) => set({ players }),
   setPlayerIdCounter: (count) => set({ playerIdCounter: count }),
 
-  // --- ACTIONS: ENGINES ---
-  syncToSupabase: () => {
+  // --- ACTIONS: STORAGE (LOCAL HISTORY / OFFLINE) ---
+  saveToHistory: () => {
     const state = get();
-    if (!state.tournamentId || !state.isHost) return;
+    if (!state.tournamentId) return;
 
-    if (syncTimeout) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(async () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
       const now = new Date().toISOString();
       set({ lastModified: now });
       const finalState = get();
@@ -106,105 +107,198 @@ export const useTournamentStore = create((set, get) => ({
         currentRound: finalState.currentRound,
         playerIdCounter: finalState.playerIdCounter,
         isTournamentStarted: finalState.isTournamentStarted,
-        createdAt: finalState.createdAt,
-        lastModified: finalState.lastModified
+        createdAt: finalState.createdAt || now,
+        lastModified: now
       };
-      
+
+      const historyItem = {
+        id: finalState.tournamentId,
+        name: finalState.config.name || 'Padel Tournament',
+        createdAt: finalState.createdAt || now,
+        lastModified: now,
+        playersCount: finalState.players.filter((p) => !p.isWalkout).length,
+        courtsCount: finalState.numCourts,
+        state: payload
+      };
+
       try {
-        await supabase
-          .from('tournaments')
-          .update({ state: payload })
-          .eq('id', finalState.tournamentId);
+        let history = JSON.parse(localStorage.getItem('padel_history') || '[]');
+        const idx = history.findIndex((h) => h.id === finalState.tournamentId);
+        if (idx !== -1) {
+          history[idx] = historyItem;
+        } else {
+          history.unshift(historyItem);
+        }
+        localStorage.setItem('padel_history', JSON.stringify(history));
       } catch (e) {
-        console.error('Failed to sync', e);
+        console.error('Failed to save to local history', e);
       }
-    }, 500);
+    }, 200);
   },
 
-  loadFromSupabase: async (id, isHostUser) => {
+  loadFromHistory: (id) => {
     try {
-      const { data, error } = await supabase
-        .from('tournaments')
-        .select('state')
-        .eq('id', id)
-        .single();
-      
-      if (data && data.state) {
+      const history = JSON.parse(localStorage.getItem('padel_history') || '[]');
+      const item = history.find((h) => h.id === id);
+      if (item && item.state) {
         set({
           tournamentId: id,
-          isHost: isHostUser,
-          config: data.state.config,
-          numCourts: data.state.numCourts,
-          customCourtNames: data.state.customCourtNames,
-          players: data.state.players,
-          teams: data.state.teams || [],
-          matches: data.state.matches,
-          currentRound: data.state.currentRound,
-          playerIdCounter: data.state.playerIdCounter,
-          isTournamentStarted: data.state.isTournamentStarted,
-          createdAt: data.state.createdAt || null,
-          lastModified: data.state.lastModified || null,
+          isHost: true,
+          config: item.state.config,
+          numCourts: item.state.numCourts,
+          customCourtNames: item.state.customCourtNames || {},
+          players: item.state.players || [],
+          teams: item.state.teams || [],
+          matches: item.state.matches || {},
+          currentRound: item.state.currentRound || 0,
+          playerIdCounter: item.state.playerIdCounter || 1,
+          isTournamentStarted: item.state.isTournamentStarted ?? true,
+          createdAt: item.state.createdAt || item.createdAt || null,
+          lastModified: item.state.lastModified || item.lastModified || null,
           currentView: 'manager'
         });
 
-        if (isHostUser) {
-          const historyItem = {
-            id: id,
-            name: data.state.config.name || 'Padel Tournament',
-            createdAt: data.state.createdAt,
-            playersCount: data.state.players.filter(p => !p.isWalkout).length,
-            courtsCount: data.state.numCourts
-          };
-          let history = JSON.parse(localStorage.getItem('padel_history') || '[]');
-          history = history.filter(h => h.id !== id);
-          history.unshift(historyItem);
-          localStorage.setItem('padel_history', JSON.stringify(history));
-        }
-        
-        // Ensure activeRoundTab is valid
         const st = get();
         if (st.currentRound > 0) {
           set({ activeRoundTab: st.currentRound });
         }
-      } else {
-        console.error("Tournament not found", error);
+        window.history.replaceState({}, '', `?id=${id}`);
+        return true;
       }
+      return false;
     } catch (e) {
-      console.error('Failed to load from Supabase', e);
+      console.error('Failed to load from history', e);
+      return false;
     }
   },
 
-  startTournament: async (parsedPlayers, newNumCourts, newConfig, newCourtNames, teams) => {
+  deleteTournament: (id) => {
+    try {
+      let history = JSON.parse(localStorage.getItem('padel_history') || '[]');
+      history = history.filter((h) => h.id !== id);
+      localStorage.setItem('padel_history', JSON.stringify(history));
+
+      const st = get();
+      if (st.tournamentId === id) {
+        get().resetTournament();
+      }
+    } catch (e) {
+      console.error('Failed to delete tournament', e);
+    }
+  },
+
+  resetTournament: () => {
+    set({
+      currentView: 'setup',
+      tournamentId: null,
+      isHost: true,
+      createdAt: null,
+      lastModified: null,
+      config: {
+        name: '',
+        type: 'marked_mexicano',
+        date: '',
+        time: '',
+        duration: 120,
+        maxPoints: 21,
+        sort: 'points',
+        bonus: 0,
+        restBonus: 0,
+      },
+      numCourts: 1,
+      customCourtNames: {},
+      players: [],
+      teams: [],
+      matches: {},
+      currentRound: 0,
+      playerIdCounter: 1,
+      isTournamentStarted: false,
+      activeRoundTab: 1
+    });
+    window.history.replaceState({}, '', window.location.pathname);
+  },
+
+  // --- ACTIONS: ENGINES ---
+  startTournament: (parsedPlayers, newNumCourts, newConfig, newCourtNames, teams) => {
     const state = get();
     let newPlayerId = state.playerIdCounter;
     let newPlayersArray = [];
+    let tempToRealId = {};
 
+    parsedPlayers.forEach((data) => {
+      newPlayersArray.push({
+        id: newPlayerId,
+        name: data.name,
+        tier: data.tier,
+        status: 'rest',
+        court: null,
+        isWalkout: data.isInactive,
+      });
+      tempToRealId[data.tempId] = newPlayerId;
+      newPlayerId++;
+    });
+
+    let realTeams = (teams || []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      playerIds: [tempToRealId[t.playerIds[0]], tempToRealId[t.playerIds[1]]]
+    })).filter((t) => t.playerIds[0] !== undefined && t.playerIds[1] !== undefined);
+
+    const tourneyId = 't_' + Date.now();
+    const now = new Date().toISOString();
+
+    set({
+      tournamentId: tourneyId,
+      isHost: true,
+      createdAt: now,
+      lastModified: now,
+      config: { ...state.config, ...newConfig },
+      numCourts: newNumCourts,
+      customCourtNames: newCourtNames,
+      players: newPlayersArray,
+      teams: realTeams,
+      playerIdCounter: newPlayerId,
+      matches: {},
+      currentRound: 0,
+      isTournamentStarted: true,
+      currentView: 'manager'
+    });
+
+    get().generateNextRound();
+    get().saveToHistory();
+    window.history.replaceState({}, '', `?id=${tourneyId}`);
+  },
+
+  saveConfigChanges: (parsedPlayers, newNumCourts, newConfig, newCourtNames, teams) => {
+    const state = get();
+    let newPlayerId = state.playerIdCounter;
+    let newPlayersArray = [];
     let tempToRealId = {};
 
     parsedPlayers.forEach((data) => {
       if (data.pid) {
         let p = state.players.find((x) => x.id === data.pid);
         if (p) {
-          p.name = data.name;
-          p.tier = data.tier;
-          p.isWalkout = data.isInactive;
-          if (p.isWalkout) {
-            p.status = 'rest';
-            p.court = null;
-          }
-          newPlayersArray.push({ ...p });
+          newPlayersArray.push({
+            ...p,
+            name: data.name,
+            tier: data.tier,
+            isWalkout: data.isInactive,
+            status: data.isInactive ? 'rest' : p.status,
+            court: data.isInactive ? null : p.court
+          });
           tempToRealId[data.tempId] = p.id;
         }
       } else {
         let p = state.players.find((x) => x.name.toLowerCase() === data.name.toLowerCase());
         if (p) {
-          p.tier = data.tier;
-          p.isWalkout = data.isInactive;
-          if (p.isWalkout) {
-            p.status = 'rest';
-            p.court = null;
-          }
-          newPlayersArray.push({ ...p });
+          newPlayersArray.push({
+            ...p,
+            tier: data.tier,
+            isWalkout: data.isInactive,
+            status: data.isInactive ? 'rest' : p.status,
+            court: data.isInactive ? null : p.court
+          });
           tempToRealId[data.tempId] = p.id;
         } else {
           newPlayersArray.push({
@@ -221,13 +315,11 @@ export const useTournamentStore = create((set, get) => ({
       }
     });
 
-    if (state.isTournamentStarted) {
-      state.players.forEach((oldP) => {
-        if (!newPlayersArray.find((nP) => nP.id === oldP.id)) {
-          newPlayersArray.push({ ...oldP, isWalkout: true, status: 'rest', court: null });
-        }
-      });
-    }
+    state.players.forEach((oldP) => {
+      if (!newPlayersArray.find((nP) => nP.id === oldP.id)) {
+        newPlayersArray.push({ ...oldP, isWalkout: true, status: 'rest', court: null });
+      }
+    });
 
     let nextMatches = { ...state.matches };
     if (state.currentRound > 0) {
@@ -241,11 +333,14 @@ export const useTournamentStore = create((set, get) => ({
       });
     }
 
-    let realTeams = (teams || []).map(t => ({
-       id: t.id,
-       name: t.name,
-       playerIds: [ tempToRealId[t.playerIds[0]], tempToRealId[t.playerIds[1]] ]
-    })).filter(t => t.playerIds[0] !== undefined && t.playerIds[1] !== undefined);
+    let realTeams = (teams || []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      playerIds: [
+        tempToRealId[t.playerIds[0]] ?? t.playerIds[0],
+        tempToRealId[t.playerIds[1]] ?? t.playerIds[1]
+      ]
+    })).filter((t) => t.playerIds[0] !== undefined && t.playerIds[1] !== undefined);
 
     set({
       config: { ...state.config, ...newConfig },
@@ -255,66 +350,10 @@ export const useTournamentStore = create((set, get) => ({
       teams: realTeams,
       playerIdCounter: newPlayerId,
       matches: nextMatches,
-      currentView: 'manager',
+      currentView: 'manager'
     });
 
-    const updatedState = get();
-
-    if (!updatedState.isTournamentStarted) {
-      set({ isTournamentStarted: true });
-      updatedState.generateNextRound();
-    }
-
-    const finalState = get();
-    const now = new Date().toISOString();
-    
-    set({ createdAt: now, lastModified: now });
-    const stateWithDates = get();
-
-    const payload = {
-      config: stateWithDates.config,
-      numCourts: stateWithDates.numCourts,
-      customCourtNames: stateWithDates.customCourtNames,
-      players: stateWithDates.players,
-      teams: stateWithDates.teams,
-      matches: stateWithDates.matches,
-      currentRound: stateWithDates.currentRound,
-      playerIdCounter: stateWithDates.playerIdCounter,
-      isTournamentStarted: stateWithDates.isTournamentStarted,
-      createdAt: stateWithDates.createdAt,
-      lastModified: stateWithDates.lastModified
-    };
-
-    try {
-      const { data, error } = await supabase
-        .from('tournaments')
-        .insert([{ state: payload }])
-        .select('id');
-
-        window.localStorage.setItem('padel_host_' + data[0].id, 'true');
-        window.history.replaceState({}, '', `?id=${data[0].id}`);
-        set({ tournamentId: data[0].id, isHost: true });
-        
-        let hostTourneys = JSON.parse(localStorage.getItem('host_tournaments') || '[]');
-        if (!hostTourneys.includes(data[0].id)) {
-          hostTourneys.push(data[0].id);
-          localStorage.setItem('host_tournaments', JSON.stringify(hostTourneys));
-        }
-
-        const historyItem = {
-          id: data[0].id,
-          name: stateWithDates.config.name || 'Padel Tournament',
-          createdAt: stateWithDates.createdAt,
-          playersCount: stateWithDates.players.filter(p => !p.isWalkout).length,
-          courtsCount: stateWithDates.numCourts
-        };
-        let history = JSON.parse(localStorage.getItem('padel_history') || '[]');
-        history = history.filter(h => h.id !== data[0].id);
-        history.unshift(historyItem);
-        localStorage.setItem('padel_history', JSON.stringify(history));
-    } catch (e) {
-      console.error('Failed to create tournament', e);
-    }
+    get().saveToHistory();
   },
 
   draftCourts: (availablePlayers, currentStats, courtsToDraft, teams) => {
@@ -330,59 +369,59 @@ export const useTournamentStore = create((set, get) => ({
     let entities = [];
     let handledPlayers = new Set();
     
-    (teams || []).forEach(t => {
-       let p1 = sortedForDraft.find(p => p.id === t.playerIds[0]);
-       let p2 = sortedForDraft.find(p => p.id === t.playerIds[1]);
-       if (p1 && p2) {
-          entities.push({
-             isTeam: true,
-             teamId: t.id,
-             players: [p1, p2],
-             rank: sortedForDraft.indexOf(p1) + sortedForDraft.indexOf(p2)
-          });
-          handledPlayers.add(p1.id);
-          handledPlayers.add(p2.id);
-       }
+    (teams || []).forEach((t) => {
+      let p1 = sortedForDraft.find((p) => p.id === t.playerIds[0]);
+      let p2 = sortedForDraft.find((p) => p.id === t.playerIds[1]);
+      if (p1 && p2) {
+        entities.push({
+          isTeam: true,
+          teamId: t.id,
+          players: [p1, p2],
+          rank: (sortedForDraft.indexOf(p1) + sortedForDraft.indexOf(p2)) / 2
+        });
+        handledPlayers.add(p1.id);
+        handledPlayers.add(p2.id);
+      }
     });
 
-    sortedForDraft.forEach(p => {
-       if (!handledPlayers.has(p.id)) {
-          entities.push({
-             isTeam: false,
-             players: [p],
-             rank: sortedForDraft.indexOf(p)
-          });
-       }
+    sortedForDraft.forEach((p) => {
+      if (!handledPlayers.has(p.id)) {
+        entities.push({
+          isTeam: false,
+          players: [p],
+          rank: sortedForDraft.indexOf(p)
+        });
+      }
     });
 
     entities.sort((a, b) => a.rank - b.rank);
 
     let draftedCourts = [];
     for (let c = 0; c < courtsToDraft; c++) {
-        let selected = draftCourtEntities(entities);
-        if (!selected) break;
+      let selected = draftCourtEntities(entities);
+      if (!selected) break;
 
-        let courtPlayers = { t1: [], t2: [] };
-        if (selected.length === 2) {
-            courtPlayers.t1 = selected[0].players.map(p => p.id);
-            courtPlayers.t2 = selected[1].players.map(p => p.id);
-        } else if (selected.length === 3) {
-            let team = selected.find(e => e.isTeam);
-            let solos = selected.filter(e => !e.isTeam);
-            courtPlayers.t1 = team.players.map(p => p.id);
-            courtPlayers.t2 = [solos[0].players[0].id, solos[1].players[0].id];
-        } else if (selected.length === 4) {
-            let solos = selected.map(e => e.players[0]);
-            if (state.config.type.includes('marked')) {
-               const tierVal = { A: 4, B: 3, C: 2, D: 1 };
-               solos.sort((a, b) => (tierVal[b.tier] || 0) - (tierVal[a.tier] || 0));
-            } else {
-               solos.sort((a, b) => currentStats[b.id].points - currentStats[a.id].points);
-            }
-            courtPlayers.t1 = [solos[0].id, solos[2].id];
-            courtPlayers.t2 = [solos[1].id, solos[3].id];
+      let courtPlayers = { t1: [], t2: [] };
+      if (selected.length === 2) {
+        courtPlayers.t1 = selected[0].players.map((p) => p.id);
+        courtPlayers.t2 = selected[1].players.map((p) => p.id);
+      } else if (selected.length === 3) {
+        let team = selected.find((e) => e.isTeam);
+        let solos = selected.filter((e) => !e.isTeam);
+        courtPlayers.t1 = team.players.map((p) => p.id);
+        courtPlayers.t2 = [solos[0].players[0].id, solos[1].players[0].id];
+      } else if (selected.length === 4) {
+        let solos = selected.map((e) => e.players[0]);
+        if (state.config.type.includes('marked')) {
+          const tierVal = { A: 4, B: 3, C: 2, D: 1 };
+          solos.sort((a, b) => (tierVal[b.tier] || 0) - (tierVal[a.tier] || 0));
+        } else {
+          solos.sort((a, b) => currentStats[b.id].points - currentStats[a.id].points);
         }
-        draftedCourts.push(courtPlayers);
+        courtPlayers.t1 = [solos[0].id, solos[2].id];
+        courtPlayers.t2 = [solos[1].id, solos[3].id];
+      }
+      draftedCourts.push(courtPlayers);
     }
     return draftedCourts;
   },
@@ -432,13 +471,15 @@ export const useTournamentStore = create((set, get) => ({
       matches: nextMatches,
       activeRoundTab: nextRound,
     });
-    get().syncToSupabase();
+    get().saveToHistory();
   },
 
   setScore: (matchKey, scoreVal, teamIndex) => {
     const state = get();
     const match = state.matches[matchKey];
     if (!match) return;
+
+    const maxPts = Number.isInteger(state.config.maxPoints) && state.config.maxPoints > 0 ? state.config.maxPoints : 21;
 
     let newMatch = { ...match };
     if (scoreVal === null) {
@@ -447,31 +488,29 @@ export const useTournamentStore = create((set, get) => ({
     } else {
       if (teamIndex === 1) {
         newMatch.score1 = scoreVal;
-        newMatch.score2 = state.config.maxPoints - scoreVal;
+        newMatch.score2 = maxPts - scoreVal;
       } else {
         newMatch.score2 = scoreVal;
-        newMatch.score1 = state.config.maxPoints - scoreVal;
+        newMatch.score1 = maxPts - scoreVal;
       }
     }
 
     set({ matches: { ...state.matches, [matchKey]: newMatch } });
-    get().syncToSupabase();
-
-    // Auto-advance is disabled. Users must click Generate Next Round manually.
+    get().saveToHistory();
   },
 
   generateMatchForCourt: (courtId) => {
     const state = get();
     let updatedPlayers = [...state.players];
     
-    updatedPlayers.forEach(p => {
-       if (p.court === courtId) {
-          p.status = 'rest';
-          p.court = null;
-       }
+    updatedPlayers.forEach((p) => {
+      if (p.court === courtId) {
+        p.status = 'rest';
+        p.court = null;
+      }
     });
 
-    let availablePlayers = updatedPlayers.filter(p => !p.isWalkout && p.status === 'rest');
+    let availablePlayers = updatedPlayers.filter((p) => !p.isWalkout && p.status === 'rest');
     if (availablePlayers.length < 4) return;
 
     const { stats } = state.getLeaderboardStats();
@@ -481,7 +520,7 @@ export const useTournamentStore = create((set, get) => ({
 
     let cMatch = draftedCourts[0];
     let nextMatches = { ...state.matches };
-    let courtMatches = Object.values(state.matches).filter(m => m.court === courtId);
+    let courtMatches = Object.values(state.matches).filter((m) => m.court === courtId);
     let nextRound = courtMatches.length + 1;
     let matchId = `r${nextRound}-c${courtId}`; 
 
@@ -495,8 +534,8 @@ export const useTournamentStore = create((set, get) => ({
       timestamp: Date.now()
     };
 
-    [...cMatch.t1, ...cMatch.t2].forEach(id => {
-      let pIndex = updatedPlayers.findIndex(p => p.id === id);
+    [...cMatch.t1, ...cMatch.t2].forEach((id) => {
+      let pIndex = updatedPlayers.findIndex((p) => p.id === id);
       if (pIndex !== -1) {
         updatedPlayers[pIndex].status = 'playing';
         updatedPlayers[pIndex].court = courtId;
@@ -506,42 +545,42 @@ export const useTournamentStore = create((set, get) => ({
     let newCurrentRound = Math.max(state.currentRound, nextRound);
 
     set({ players: updatedPlayers, matches: nextMatches, currentRound: newCurrentRound });
-    get().syncToSupabase();
+    get().saveToHistory();
   },
 
   triggerNextRound: () => {
     const state = get();
     let latestMatches = {};
     for (let i = 1; i <= state.numCourts; i++) {
-       let courtMatches = Object.values(state.matches).filter(m => m.court === i);
-       if (courtMatches.length > 0) {
-          latestMatches[i] = courtMatches.reduce((max, m) => m.round > max.round ? m : max, courtMatches[0]);
-       }
+      let courtMatches = Object.values(state.matches).filter((m) => m.court === i);
+      if (courtMatches.length > 0) {
+        latestMatches[i] = courtMatches.reduce((max, m) => (m.round > max.round ? m : max), courtMatches[0]);
+      }
     }
 
     let readyCourts = [];
     let allReady = true;
     for (let i = 1; i <= state.numCourts; i++) {
-       let lm = latestMatches[i];
-       if (lm && lm.score1 !== null && lm.score2 !== null) {
-          readyCourts.push(i);
-       } else {
-          allReady = false;
-       }
+      let lm = latestMatches[i];
+      if (lm && lm.score1 !== null && lm.score2 !== null) {
+        readyCourts.push(i);
+      } else {
+        allReady = false;
+      }
     }
 
     if (readyCourts.length === 0) return;
 
     if (allReady) {
-       let rounds = Object.values(latestMatches).map(m => m.round);
-       let sameRound = rounds.every(r => r === rounds[0]);
-       if (sameRound) {
-          get().generateNextRound();
-       } else {
-          readyCourts.forEach(c => get().generateMatchForCourt(c));
-       }
+      let rounds = Object.values(latestMatches).map((m) => m.round);
+      let sameRound = rounds.every((r) => r === rounds[0]);
+      if (sameRound) {
+        get().generateNextRound();
+      } else {
+        readyCourts.forEach((c) => get().generateMatchForCourt(c));
+      }
     } else {
-       readyCourts.forEach(c => get().generateMatchForCourt(c));
+      readyCourts.forEach((c) => get().generateMatchForCourt(c));
     }
   },
 
@@ -552,12 +591,12 @@ export const useTournamentStore = create((set, get) => ({
 
     let pIds = newEntity.type === 'team' ? [newEntity.p1, newEntity.p2] : [newEntity.id];
 
-    // Remove these players from any active match
+    // Remove these players from any active unscored match
     Object.keys(nextMatches).forEach((k) => {
       let rm = { ...nextMatches[k] };
       if (rm.score1 === null || rm.score2 === null) {
         let changed = false;
-        pIds.forEach(pid => {
+        pIds.forEach((pid) => {
           if (rm.t1.includes(pid)) {
             rm.t1 = rm.t1.map((id) => (id === pid ? null : id));
             changed = true;
@@ -577,21 +616,21 @@ export const useTournamentStore = create((set, get) => ({
     
     let isOccupiedByTeam = false;
     if (existingP1 !== null && existingP2 !== null) {
-       isOccupiedByTeam = (state.teams || []).some(t => 
-         (t.playerIds[0] === existingP1 && t.playerIds[1] === existingP2) ||
-         (t.playerIds[0] === existingP2 && t.playerIds[1] === existingP1)
-       );
+      isOccupiedByTeam = (state.teams || []).some((t) => 
+        (t.playerIds[0] === existingP1 && t.playerIds[1] === existingP2) ||
+        (t.playerIds[0] === existingP2 && t.playerIds[1] === existingP1)
+      );
     }
 
     if (newEntity.type === 'team') {
-       targetSide = [newEntity.p1, newEntity.p2];
+      targetSide = [newEntity.p1, newEntity.p2];
     } else {
-       if (isOccupiedByTeam) {
-          targetSide = targetSide.map((_, idx) => idx === selectedSlot.index ? newEntity.id : null);
-       } else {
-          targetSide = [...targetSide];
-          targetSide[selectedSlot.index] = newEntity.id;
-       }
+      if (isOccupiedByTeam) {
+        targetSide = targetSide.map((_, idx) => (idx === selectedSlot.index ? newEntity.id : null));
+      } else {
+        targetSide = [...targetSide];
+        targetSide[selectedSlot.index] = newEntity.id;
+      }
     }
 
     if (selectedSlot.team === 1) m.t1 = targetSide;
@@ -620,7 +659,7 @@ export const useTournamentStore = create((set, get) => ({
     });
 
     set({ matches: nextMatches, players: nextPlayers });
-    get().syncToSupabase();
+    get().saveToHistory();
   },
 
   getLeaderboardStats: () => {
@@ -630,10 +669,13 @@ export const useTournamentStore = create((set, get) => ({
       stats[p.id] = { games: 0, wins: 0, losses: 0, ties: 0, points: 0, diff: 0, rests: 0, streak: 0 };
     });
 
-    // To calculate streak, we need matches ordered by round
     const sortedMatches = Object.values(state.matches)
       .filter((m) => m.score1 !== null && m.score2 !== null)
       .sort((a, b) => a.round - b.round);
+
+    const roundsWithFinishedMatches = new Set(sortedMatches.map((m) => m.round));
+    const playerFinishedRounds = {};
+    state.players.forEach((p) => { playerFinishedRounds[p.id] = new Set(); });
 
     sortedMatches.forEach((m) => {
       m.t1.forEach((id) => {
@@ -641,6 +683,7 @@ export const useTournamentStore = create((set, get) => ({
           stats[id].games++;
           stats[id].points += m.score1;
           stats[id].diff += m.score1 - m.score2;
+          playerFinishedRounds[id]?.add(m.round);
           if (m.score1 > m.score2) {
             stats[id].wins++;
             stats[id].streak++;
@@ -658,6 +701,7 @@ export const useTournamentStore = create((set, get) => ({
           stats[id].games++;
           stats[id].points += m.score2;
           stats[id].diff += m.score2 - m.score1;
+          playerFinishedRounds[id]?.add(m.round);
           if (m.score2 > m.score1) {
             stats[id].wins++;
             stats[id].streak++;
@@ -673,50 +717,56 @@ export const useTournamentStore = create((set, get) => ({
     });
 
     state.players.forEach((p) => {
-      if (!p.isWalkout && state.currentRound > 0) {
-        stats[p.id].rests = Math.max(0, state.currentRound - stats[p.id].games);
+      if (!p.isWalkout) {
+        let restCount = 0;
+        roundsWithFinishedMatches.forEach((r) => {
+          if (!playerFinishedRounds[p.id].has(r)) {
+            restCount++;
+          }
+        });
+        stats[p.id].rests = restCount;
       } else {
         stats[p.id].rests = 0;
       }
       
       let s = stats[p.id];
-      s.totalPts = s.points + s.wins * state.config.bonus + s.rests * state.config.restBonus;
+      s.totalPts = s.points + s.wins * (state.config.bonus || 0) + s.rests * (state.config.restBonus || 0);
     });
 
     let leaderboardItems = [];
     let handledPlayers = new Set();
     
-    (state.teams || []).forEach(t => {
-       let p1 = state.players.find(p => p.id === t.playerIds[0]);
-       let p2 = state.players.find(p => p.id === t.playerIds[1]);
-       if (p1 && p2) {
-          leaderboardItems.push({
-             isTeam: true,
-             id: t.id,
-             name: t.name,
-             stats: stats[p1.id],
-             players: [p1, p2],
-             sortVal: stats[p1.id].totalPts,
-             isWalkout: p1.isWalkout || p2.isWalkout
-          });
-          handledPlayers.add(p1.id);
-          handledPlayers.add(p2.id);
-       }
+    (state.teams || []).forEach((t) => {
+      let p1 = state.players.find((p) => p.id === t.playerIds[0]);
+      let p2 = state.players.find((p) => p.id === t.playerIds[1]);
+      if (p1 && p2) {
+        leaderboardItems.push({
+          isTeam: true,
+          id: t.id,
+          name: t.name,
+          stats: stats[p1.id],
+          players: [p1, p2],
+          sortVal: stats[p1.id].totalPts,
+          isWalkout: p1.isWalkout || p2.isWalkout
+        });
+        handledPlayers.add(p1.id);
+        handledPlayers.add(p2.id);
+      }
     });
 
-    state.players.forEach(p => {
-       if (!handledPlayers.has(p.id)) {
-          leaderboardItems.push({
-             isTeam: false,
-             id: p.id,
-             name: p.name,
-             tier: p.tier,
-             isWalkout: p.isWalkout,
-             stats: stats[p.id],
-             players: [p],
-             sortVal: stats[p.id].totalPts
-          });
-       }
+    state.players.forEach((p) => {
+      if (!handledPlayers.has(p.id)) {
+        leaderboardItems.push({
+          isTeam: false,
+          id: p.id,
+          name: p.name,
+          tier: p.tier,
+          isWalkout: p.isWalkout,
+          stats: stats[p.id],
+          players: [p],
+          sortVal: stats[p.id].totalPts
+        });
+      }
     });
 
     leaderboardItems.sort((a, b) => {

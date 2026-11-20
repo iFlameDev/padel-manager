@@ -1,4 +1,3 @@
-import React from 'react';
 import { useTournamentStore } from '../store/useTournamentStore';
 import { Flame, Medal } from 'lucide-react';
 import clsx from 'clsx';
@@ -20,15 +19,15 @@ function getCourtStyle(courtId) {
 }
 
 export default function Leaderboard() {
-  const { currentView, getLeaderboardStats, config, customCourtNames } = useTournamentStore();
-  const { leaderboardItems, stats } = getLeaderboardStats();
+  const { currentView, getLeaderboardStats, config, customCourtNames, showBadges } = useTournamentStore();
+  const { leaderboardItems } = getLeaderboardStats();
 
   const isSetup = currentView === 'setup';
   if (isSetup) return null;
 
   const winBonusCfg = config.bonus || 0;
   const restBonusCfg = config.restBonus || 0;
-  const showMarking = config.type.includes('marked');
+  const showMarking = config.type.includes('marked') && showBadges;
 
   return (
     <div className="w-full overflow-x-auto hide-scrollbar pb-20">
@@ -48,7 +47,6 @@ export default function Leaderboard() {
           <tbody>
             {leaderboardItems.map((item, index) => {
               const s = item.stats;
-              // playing status is true if ANY player in team is playing
               const isPlaying = item.players.some(p => p.status === 'playing');
               const isInactive = item.isWalkout;
               const hasStreak = s.streak >= 3;
@@ -67,7 +65,11 @@ export default function Leaderboard() {
                   </td>
                   <td className="pl-2 pr-3 py-4 flex flex-wrap items-center w-full">
                     {isInactive && <span className="bg-red-900/50 text-red-400 border border-red-700/50 text-[9px] px-1.5 py-0.5 rounded font-bold mr-2 tracking-wider shrink-0 mb-1">OFF</span>}
-                    {!item.isTeam && showMarking && item.players[0].tier !== '-' && <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-bold mr-2 shrink-0 mb-1 ${getTierStyle(item.players[0].tier)}`}>{item.players[0].tier}</span>}
+                    {!item.isTeam && showMarking && item.players[0].tier !== '-' && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-bold mr-2 shrink-0 mb-1 ${getTierStyle(item.players[0].tier)}`}>
+                        {item.players[0].tier}
+                      </span>
+                    )}
                     <div className={clsx("flex flex-col min-w-0 mr-1", isPlaying ? "font-bold text-white" : "text-slate-300 font-medium", isInactive && "line-through decoration-slate-500")}>
                       <span className="break-words">{item.name}</span>
                       {item.isTeam && (
@@ -77,7 +79,11 @@ export default function Leaderboard() {
                       )}
                     </div>
                     {hasStreak && !isInactive && <Flame className="w-4 h-4 text-orange-500 fill-orange-500 animate-pulse ml-1 shrink-0" />}
-                    {isPlaying && !isInactive && cName && <span className={`text-[9px] px-1.5 py-0.5 rounded ml-1 shadow-sm border shrink-0 mt-1 md:mt-0 ${getCourtStyle(pCourt)}`}>{cName}</span>}
+                    {isPlaying && !isInactive && cName && showBadges && (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded ml-1 shadow-sm border shrink-0 mt-1 md:mt-0 ${getCourtStyle(pCourt)}`}>
+                        {cName}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-4 text-center text-slate-400 font-mono text-[13px]">{s.games}</td>
                   <td className="px-2 py-4 text-center text-slate-300 font-mono text-[13px] whitespace-nowrap">{s.wins}-{s.losses}-{s.ties}</td>

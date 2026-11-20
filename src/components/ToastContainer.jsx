@@ -1,4 +1,3 @@
-import React from 'react';
 import { useToastStore } from '../store/useToastStore';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertCircle, CheckCircle, X } from 'lucide-react';

@@ -1,4 +1,4 @@
-import React from 'react';
+import { createPortal } from 'react-dom';
 import { useTournamentStore } from '../store/useTournamentStore';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -18,7 +18,7 @@ export default function ScoreModal({ isOpen, matchKey, teamIndex, onClose }) {
   const p2 = players.find(x => x.id === tId2) || { name: 'Pemain 2' };
   const cName = customCourtNames[m.court] || `Court ${m.court}`;
 
-  const max = config.maxPoints;
+  const max = Number.isInteger(config.maxPoints) && config.maxPoints > 0 ? config.maxPoints : 21;
   const gridButtons = [];
   for (let i = 0; i <= max; i++) {
     gridButtons.push(
@@ -32,9 +32,9 @@ export default function ScoreModal({ isOpen, matchKey, teamIndex, onClose }) {
     );
   }
 
-  return (
+  const modalContent = (
     <AnimatePresence>
-      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 backdrop-blur-sm">
         <motion.div 
           initial={{ opacity: 0, scale: 0.95, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -66,4 +66,6 @@ export default function ScoreModal({ isOpen, matchKey, teamIndex, onClose }) {
       </div>
     </AnimatePresence>
   );
+
+  return createPortal(modalContent, document.body);
 }
