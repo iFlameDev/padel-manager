@@ -16,7 +16,7 @@ function getTierStyle(tier) {
   }
 }
 
-function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, selectedSlot, lastSwappedSlot, showMarking, onSelect }) {
+function SlotButton({ playerObj, team, index, matches, selectedSlot, lastSwappedSlot, showMarking, onSelect, disabled }) {
   const isSelected = selectedSlot?.team === team && selectedSlot?.index === index;
   const isAnimating = lastSwappedSlot === `${team}-${index}` || lastSwappedSlot === 'all';
   
@@ -34,20 +34,14 @@ function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, sel
         y: [0, -4, 0]
       } : {}}
       transition={{ duration: 0.6, ease: "easeInOut" }}
+      disabled={disabled}
       onClick={() => onSelect({ team, index })}
       className={clsx(
-        "w-full py-3 px-3 rounded-xl text-center text-[13px] font-bold transition border",
+        "w-full py-3 px-3 rounded-xl text-center text-[13px] font-bold transition border disabled:opacity-50 disabled:cursor-not-allowed",
         isSelected ? "bg-emerald-600/90 border-emerald-400 text-white ring-2 ring-emerald-300" : "bg-slate-800 border-slate-600/80 text-slate-300 hover:bg-slate-700 hover:border-slate-500",
-        teamObj ? "h-[100px] flex flex-col justify-center items-center gap-1 border-indigo-700/50 bg-indigo-900/20" : ""
       )}
     >
-      {teamObj ? (
-        <>
-          <div className="text-[14px] text-indigo-400 mb-1 uppercase tracking-wider">{teamObj.name}</div>
-          <div className="text-[11px] font-medium text-slate-300">{teamPlayers[0]?.name || '?'}</div>
-          <div className="text-[11px] font-medium text-slate-300">{teamPlayers[1]?.name || '?'}</div>
-        </>
-      ) : playerObj ? (
+      {playerObj ? (
         <div className="flex items-center justify-center gap-1.5">
           {showMarking && playerObj.tier !== '-' && (
             <span className={clsx("text-[9px] px-1 py-0.5 rounded border font-mono", getTierStyle(playerObj.tier))}>{playerObj.tier}</span>
@@ -63,7 +57,7 @@ function SlotButton({ playerObj, team, index, teamObj, teamPlayers, matches, sel
 }
 
 export default function SwapModal({ isOpen, matchKey, onClose }) {
-  const { matches, players, teams, customCourtNames, executeSwap, shuffleCourt, config, showBadges } = useTournamentStore();
+  const { matches, players, teams, customCourtNames, executeSwap, swapMatchSlots, shuffleCourt, config, showBadges } = useTournamentStore();
   const showMarking = config.type.includes('marked') && showBadges;
   const [selectedSlot, setSelectedSlot] = useState(null); // { team: 1|2, index: 0|1 }
   const [lastSwappedSlot, setLastSwappedSlot] = useState(null);
@@ -78,6 +72,7 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
 
   const m = matches[matchKey];
   if (!m) return null;
+  const isMatchScored = m.score1 !== null && m.score2 !== null;
 
   const team1Obj = (m.t1[0] && m.t1[1]) ? (teams || []).find(t => 
     (t.playerIds[0] === m.t1[0] && t.playerIds[1] === m.t1[1]) ||
@@ -161,7 +156,10 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
       toast.error("Pilih dulu slot pemain di lapangan atas yang mau diganti!");
       return;
     }
-    executeSwap(matchKey, selectedSlot, entity);
+    if (!executeSwap(matchKey, selectedSlot, entity)) {
+      toast.error("Pertandingan yang sudah selesai tidak dapat diubah.");
+      return;
+    }
     
     const slotStr = `${selectedSlot.team}-${selectedSlot.index}`;
     setLastSwappedSlot(slotStr);
@@ -170,6 +168,62 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
       setLastSwappedSlot(null);
     }, 500);
   };
+
+  const handleSelectSlot = (slot) => {
+    if (isMatchScored) {
+      toast.error("Pertandingan yang sudah selesai tidak dapat diubah.");
+      return;
+    }
+    if (!selectedSlot) {
+      setSelectedSlot(slot);
+      return;
+    }
+    if (selectedSlot.team === slot.team && selectedSlot.index === slot.index) {
+      setSelectedSlot(null);
+      return;
+    }
+    if (!swapMatchSlots(matchKey, selectedSlot, slot)) {
+      toast.error("Pemain tidak dapat ditukar pada pertandingan ini.");
+      return;
+    }
+
+    setSelectedSlot(null);
+    setLastSwappedSlot('all');
+    setTimeout(() => setLastSwappedSlot(null), 600);
+    toast.success("Partner berhasil ditukar di court ini!");
+  };
+
+  const renderSideSlots = (team, teamObj, firstPlayer, secondPlayer) => (
+    <>
+      {teamObj && (
+        <div className="text-[10px] text-indigo-400 uppercase tracking-wider text-center font-bold">
+          {teamObj.name}
+        </div>
+      )}
+      <SlotButton
+        playerObj={firstPlayer}
+        team={team}
+        index={0}
+        matches={matches}
+        selectedSlot={selectedSlot}
+        lastSwappedSlot={lastSwappedSlot}
+        showMarking={showMarking}
+        onSelect={handleSelectSlot}
+        disabled={isMatchScored}
+      />
+      <SlotButton
+        playerObj={secondPlayer}
+        team={team}
+        index={1}
+        matches={matches}
+        selectedSlot={selectedSlot}
+        lastSwappedSlot={lastSwappedSlot}
+        showMarking={showMarking}
+        onSelect={handleSelectSlot}
+        disabled={isMatchScored}
+      />
+    </>
+  );
 
   const handleShuffle = () => {
     const success = shuffleCourt(matchKey);
@@ -213,85 +267,13 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
           
           <div className="bg-slate-900/60 rounded-2xl border border-slate-700/50 p-3 mb-4 flex relative items-center gap-8 md:gap-10 shadow-inner">
             <div className="w-1/2 flex flex-col gap-3 justify-center">
-              {team1Obj ? (
-                <SlotButton 
-                  playerObj={null} 
-                  team={1} 
-                  index={0} 
-                  teamObj={team1Obj} 
-                  teamPlayers={[p[0], p[1]]}
-                  matches={matches}
-                  selectedSlot={selectedSlot}
-                  lastSwappedSlot={lastSwappedSlot}
-                  showMarking={showMarking}
-                  onSelect={setSelectedSlot}
-                />
-              ) : (
-                <>
-                  <SlotButton 
-                    playerObj={p[0]} 
-                    team={1} 
-                    index={0} 
-                    matches={matches}
-                    selectedSlot={selectedSlot}
-                    lastSwappedSlot={lastSwappedSlot}
-                    showMarking={showMarking}
-                    onSelect={setSelectedSlot}
-                  />
-                  <SlotButton 
-                    playerObj={p[1]} 
-                    team={1} 
-                    index={1} 
-                    matches={matches}
-                    selectedSlot={selectedSlot}
-                    lastSwappedSlot={lastSwappedSlot}
-                    showMarking={showMarking}
-                    onSelect={setSelectedSlot}
-                  />
-                </>
-              )}
+              {renderSideSlots(1, team1Obj, p[0], p[1])}
             </div>
             
             <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-slate-500 font-bold italic text-sm md:text-lg bg-slate-900 z-10 px-2 py-1 rounded-full border border-slate-800">VS</div>
             
             <div className="w-1/2 flex flex-col gap-3 justify-center">
-              {team2Obj ? (
-                <SlotButton 
-                  playerObj={null} 
-                  team={2} 
-                  index={0} 
-                  teamObj={team2Obj} 
-                  teamPlayers={[p[2], p[3]]}
-                  matches={matches}
-                  selectedSlot={selectedSlot}
-                  lastSwappedSlot={lastSwappedSlot}
-                  showMarking={showMarking}
-                  onSelect={setSelectedSlot}
-                />
-              ) : (
-                <>
-                  <SlotButton 
-                    playerObj={p[2]} 
-                    team={2} 
-                    index={0} 
-                    matches={matches}
-                    selectedSlot={selectedSlot}
-                    lastSwappedSlot={lastSwappedSlot}
-                    showMarking={showMarking}
-                    onSelect={setSelectedSlot}
-                  />
-                  <SlotButton 
-                    playerObj={p[3]} 
-                    team={2} 
-                    index={1} 
-                    matches={matches}
-                    selectedSlot={selectedSlot}
-                    lastSwappedSlot={lastSwappedSlot}
-                    showMarking={showMarking}
-                    onSelect={setSelectedSlot}
-                  />
-                </>
-              )}
+              {renderSideSlots(2, team2Obj, p[2], p[3])}
             </div>
           </div>
 
@@ -306,8 +288,9 @@ export default function SwapModal({ isOpen, matchKey, onClose }) {
                   <button 
                     key={ent.id}
                     onClick={() => handleSwap(ent)} 
+                    disabled={isMatchScored}
                     className={clsx(
-                      "relative p-3 rounded-xl border flex flex-col items-center justify-center transition shadow-sm",
+                      "relative p-3 rounded-xl border flex flex-col items-center justify-center transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
                       isAssignedOtherCourt ? "opacity-50 hover:opacity-100" : "opacity-100",
                       ent.type === 'team' ? "bg-indigo-900/40 border-indigo-700/50 hover:bg-indigo-800/60" : "border-slate-600/80 bg-slate-800/80 hover:bg-slate-700"
                     )}

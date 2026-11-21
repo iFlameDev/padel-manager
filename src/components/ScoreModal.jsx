@@ -10,6 +10,10 @@ export default function ScoreModal({ isOpen, matchKey, teamIndex, onClose }) {
 
   const m = matches[matchKey];
   if (!m) return null;
+  const isMatchScored = m.score1 !== null && m.score2 !== null;
+  const hasMissingPlayers = !isMatchScored && [...m.t1, ...m.t2].some((id) => (
+    id === null || !players.some((player) => player.id === id && !player.isWalkout)
+  ));
 
   const tId1 = teamIndex === 1 ? m.t1[0] : m.t2[0];
   const tId2 = teamIndex === 1 ? m.t1[1] : m.t2[1];
@@ -53,15 +57,22 @@ export default function ScoreModal({ isOpen, matchKey, teamIndex, onClose }) {
             {p1.name} <span className="text-slate-500 text-lg">&amp;</span> {p2.name}
           </p>
           
-          <div className="grid grid-cols-5 gap-2.5">
-            {gridButtons}
-          </div>
-          
-          <div className="mt-8 flex justify-center">
-            <button onClick={() => { setScore(matchKey, null, teamIndex); onClose(); }} className="text-xs bg-red-900/40 hover:bg-red-600 text-red-300 hover:text-white border border-red-700/50 py-3 px-8 rounded-xl transition font-bold tracking-widest uppercase">
-              Reset Score
-            </button>
-          </div>
+          {hasMissingPlayers ? (
+            <p className="text-center text-sm text-amber-300 bg-amber-900/20 border border-amber-800/50 rounded-xl p-3">
+              Lengkapi slot pemain melalui pengaturan pertandingan sebelum memasukkan skor.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-5 gap-2.5">
+                {gridButtons}
+              </div>
+              <div className="mt-8 flex justify-center">
+                <button onClick={() => { setScore(matchKey, null, teamIndex); onClose(); }} className="text-xs bg-red-900/40 hover:bg-red-600 text-red-300 hover:text-white border border-red-700/50 py-3 px-8 rounded-xl transition font-bold tracking-widest uppercase">
+                  Reset Score
+                </button>
+              </div>
+            </>
+          )}
         </motion.div>
       </div>
     </AnimatePresence>

@@ -16,6 +16,16 @@ function rowsToBulkText(rows, marked) {
     .join('\n');
 }
 
+function sortPlayerRowsAscending(rows) {
+  return [...rows].sort((a, b) => {
+    const nameA = a.name.trim();
+    const nameB = b.name.trim();
+    if (!nameA) return nameB ? 1 : 0;
+    if (!nameB) return -1;
+    return nameA.localeCompare(nameB, 'id', { sensitivity: 'base', numeric: true });
+  });
+}
+
 function bulkTextToRows(text, existingRows = []) {
   const lines = text.split('\n');
   const newRows = [];
@@ -74,7 +84,7 @@ function bulkTextToRows(text, existingRows = []) {
 export default function SetupView() {
   const { 
     config, currentView, setView, numCourts, customCourtNames, 
-    players, isTournamentStarted, matches, startTournament, 
+    players, startTournament,
     saveConfigChanges, loadFromHistory, deleteTournament 
   } = useTournamentStore();
   
@@ -82,9 +92,6 @@ export default function SetupView() {
   const [localCourts, setLocalCourts] = useState(() => numCourts);
   const [localCourtNames, setLocalCourtNames] = useState(() => customCourtNames);
 
-  const hasScoredMatches = Object.values(matches).some(m => m.score1 !== null && m.score2 !== null);
-  const isDisabled = isTournamentStarted && hasScoredMatches;
-  
   const [inputMode, setInputMode] = useState('row'); // 'row' | 'bulk'
   const [playerRows, setPlayerRows] = useState(() => {
     if (players.length > 0) {
@@ -178,7 +185,6 @@ export default function SetupView() {
   }, [localConfig.type]);
 
   const handleConfigChange = (e) => {
-    if (isDisabled) return;
     const { name, value, type, checked } = e.target;
     let val = value;
     if (type === 'number') {
@@ -236,7 +242,7 @@ export default function SetupView() {
     if (mode === 'bulk') {
       setBulkText(rowsToBulkText(playerRows, isMarked));
     } else {
-      const parsedRows = bulkTextToRows(bulkText, playerRows);
+      const parsedRows = sortPlayerRowsAscending(bulkTextToRows(bulkText, playerRows));
       setPlayerRows(parsedRows);
     }
     setInputMode(mode);
@@ -292,7 +298,13 @@ export default function SetupView() {
   };
 
   const handleSave = () => {
-    const rowsToParse = inputMode === 'bulk' ? bulkTextToRows(bulkText, playerRows) : playerRows;
+    const rowsToParse = sortPlayerRowsAscending(
+      inputMode === 'bulk' ? bulkTextToRows(bulkText, playerRows) : playerRows
+    );
+    setPlayerRows(rowsToParse);
+    if (inputMode === 'bulk') {
+      setBulkText(rowsToBulkText(rowsToParse, isMarked));
+    }
     const parsedData = rowsToParse.filter(r => r.name.trim() !== '').map(r => ({
       name: r.name.trim(),
       tier: r.tier,
@@ -369,7 +381,7 @@ export default function SetupView() {
         <div className="bg-slate-900/80 p-4 md:p-5 rounded-xl border border-slate-700/80 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="md:col-span-2 border-b border-slate-700/50 pb-2 mb-2 flex justify-between items-center">
             <h2 className="text-lg font-bold text-amber-400">Tournament Info</h2>
-            {!isDisabled && currentView === 'setup' && (
+            {currentView === 'setup' && (
               <button onClick={openHistoryModal} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-600 transition flex items-center gap-1.5">
                 <History className="w-3.5 h-3.5 text-slate-400" />
                 History ({historyList.length})
@@ -380,14 +392,14 @@ export default function SetupView() {
           <div className="md:col-span-2">
             <div className="w-full">
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Nama Turnamen</label>
-              <input type="text" name="name" value={localConfig.name} onChange={handleConfigChange} placeholder="Contoh: Padel DNA Weekly" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition placeholder-slate-500" disabled={isDisabled} />
+              <input type="text" name="name" value={localConfig.name} onChange={handleConfigChange} placeholder="Contoh: Padel DNA Weekly" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition placeholder-slate-500" />
             </div>
           </div>
           
           <div className="flex gap-3 md:col-span-2">
             <div className="w-1/2">
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Tipe Game</label>
-              <select name="type" value={localConfig.type} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-emerald-400 text-sm outline-none font-bold focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50" disabled={isDisabled}>
+              <select name="type" value={localConfig.type} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-emerald-400 text-sm outline-none font-bold focus:ring-1 focus:ring-emerald-500 transition">
                 <option value="marked_mexicano">Marked Mexicano</option>
                 <option value="marked_americano">Marked Americano</option>
                 <option value="mexicano">Mexicano (Pure)</option>
@@ -396,7 +408,7 @@ export default function SetupView() {
             </div>
             <div className="w-1/2">
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Leaderboard Sort By</label>
-              <select name="sort" value={localConfig.sort} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50" disabled={isDisabled}>
+              <select name="sort" value={localConfig.sort} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition">
                 <option value="points">Points</option>
                 <option value="wins">Win</option>
               </select>
@@ -406,22 +418,17 @@ export default function SetupView() {
           <div className="grid grid-cols-3 gap-3 md:col-span-2">
             <div>
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Poin / Round</label>
-              <input type="number" name="maxPoints" value={localConfig.maxPoints} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-emerald-400 text-sm outline-none text-center font-bold focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50" disabled={isDisabled} />
+              <input type="number" name="maxPoints" value={localConfig.maxPoints} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-emerald-400 text-sm outline-none text-center font-bold focus:ring-1 focus:ring-emerald-500 transition" />
             </div>
             <div>
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Win Bonus</label>
-              <input type="number" name="bonus" value={localConfig.bonus} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none text-center focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50" disabled={isDisabled} />
+              <input type="number" name="bonus" value={localConfig.bonus} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none text-center focus:ring-1 focus:ring-emerald-500 transition" />
             </div>
             <div>
               <label className="text-[10px] text-slate-400 font-mono uppercase mb-1 block">Rest Bonus</label>
-              <input type="number" name="restBonus" value={localConfig.restBonus} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none text-center focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50" disabled={isDisabled} />
+              <input type="number" name="restBonus" value={localConfig.restBonus} onChange={handleConfigChange} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-white text-sm outline-none text-center focus:ring-1 focus:ring-emerald-500 transition" />
             </div>
           </div>
-          {isDisabled && (
-            <div className="md:col-span-2 text-center text-xs text-amber-500 bg-amber-900/20 p-2 rounded-lg border border-amber-800/50 mt-4">
-              Pengaturan turnamen dikunci karena pertandingan sudah berjalan dan memiliki skor.
-            </div>
-          )}
         </div>
 
         {/* Court Config */}
@@ -429,9 +436,9 @@ export default function SetupView() {
           <div className="flex items-center justify-between mb-4">
             <label className="font-bold text-slate-300">Jumlah Lapangan:</label>
             <div className="flex items-center gap-2">
-              <button onClick={() => !isDisabled && setLocalCourts(Math.max(1, localCourts - 1))} className="bg-slate-700 hover:bg-slate-600 w-8 h-8 rounded-lg font-bold text-white transition shadow disabled:opacity-50" disabled={isDisabled}>-</button>
-              <input type="number" value={localCourts} readOnly className="w-14 bg-slate-800 border border-slate-600 rounded-lg p-1 text-white text-center font-bold outline-none pointer-events-none disabled:opacity-50" disabled={isDisabled} />
-              <button onClick={() => !isDisabled && setLocalCourts(localCourts + 1)} className="bg-slate-700 hover:bg-slate-600 w-8 h-8 rounded-lg font-bold text-white transition shadow disabled:opacity-50" disabled={isDisabled}>+</button>
+              <button onClick={() => setLocalCourts(Math.max(1, localCourts - 1))} className="bg-slate-700 hover:bg-slate-600 w-8 h-8 rounded-lg font-bold text-white transition shadow">-</button>
+              <input type="number" value={localCourts} readOnly className="w-14 bg-slate-800 border border-slate-600 rounded-lg p-1 text-white text-center font-bold outline-none pointer-events-none" />
+              <button onClick={() => setLocalCourts(localCourts + 1)} className="bg-slate-700 hover:bg-slate-600 w-8 h-8 rounded-lg font-bold text-white transition shadow">+</button>
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 border-t border-slate-700/50 pt-4">
@@ -463,8 +470,7 @@ export default function SetupView() {
               <button 
                 type="button"
                 onClick={() => setShowTeamModal(true)} 
-                disabled={isDisabled} 
-                className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                className="text-xs bg-slate-600/80 hover:bg-slate-500 text-white px-3 py-2 rounded-lg transition font-bold shadow flex items-center gap-1.5 shrink-0"
               >
                 <Plus className="w-4 h-4"/> Set Team
               </button>
@@ -485,7 +491,6 @@ export default function SetupView() {
                           type="text" 
                           placeholder="Nama" 
                           value={row.name} 
-                          disabled={isDisabled}
                           onChange={(e) => updateRow(row.id, 'name', e.target.value)} 
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
@@ -496,7 +501,6 @@ export default function SetupView() {
                           className={clsx(
                             "w-full bg-slate-900 border rounded-lg p-2.5 text-white text-sm outline-none transition",
                             duplicateIds.has(row.id) ? "border-red-500 focus:ring-1 focus:ring-red-500" : "border-slate-600 focus:ring-1 focus:ring-emerald-500",
-                            isDisabled && "opacity-60 cursor-not-allowed"
                           )} 
                         />
                         {teamObj && (
@@ -507,8 +511,7 @@ export default function SetupView() {
                         <select 
                           value={row.tier} 
                           onChange={(e) => updateRow(row.id, 'tier', e.target.value)}
-                          disabled={isDisabled}
-                          className="w-16 shrink-0 bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white font-bold text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50"
+                          className="w-16 shrink-0 bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white font-bold text-sm outline-none focus:ring-1 focus:ring-emerald-500 transition"
                         >
                           {['A','B','C','D'].map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
@@ -521,7 +524,7 @@ export default function SetupView() {
                             <div className={clsx("absolute left-[2px] top-[2px] bg-white w-3 h-3 rounded-full transition-transform", !row.isInactive ? "translate-x-[16px]" : "")}></div>
                           </div>
                         </label>
-                        <button onClick={() => removeRow(row.id)} disabled={isDisabled} className="shrink-0 text-slate-500 hover:text-red-400 p-1.5 transition ml-1 disabled:opacity-50" title="Hapus Baris">
+                        <button onClick={() => removeRow(row.id)} className="shrink-0 text-slate-500 hover:text-red-400 p-1.5 transition ml-1" title="Hapus Baris">
                           <X className="w-4 h-4" />
                         </button>
                       </div>
@@ -529,11 +532,9 @@ export default function SetupView() {
                   );
                 })}
               </div>
-              {!isDisabled && (
-                <button onClick={addRow} className="mt-3 text-xs flex items-center justify-center w-full gap-1 p-2 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
-                  <Plus className="w-4 h-4" /> Tambah Pemain
-                </button>
-              )}
+              <button onClick={addRow} className="mt-3 text-xs flex items-center justify-center w-full gap-1 p-2 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700/50 transition">
+                <Plus className="w-4 h-4" /> Tambah Pemain
+              </button>
             </div>
           ) : (
             <div className="w-full fade-in space-y-2">
@@ -545,7 +546,6 @@ export default function SetupView() {
                 rows={Math.max(6, Math.min(15, playerRows.length + 2))}
                 value={bulkText}
                 onChange={(e) => handleBulkChange(e.target.value)}
-                disabled={isDisabled}
                 placeholder={isMarked ? "Budi - A\nAndi - B\nClara - C\nKevin - D [OFF]" : "Budi\nAndi\nClara\nKevin [OFF]"}
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white focus:ring-1 focus:ring-emerald-500 outline-none font-mono text-sm leading-relaxed hide-scrollbar"
               />

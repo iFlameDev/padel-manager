@@ -32,6 +32,13 @@ export default function ManagerView() {
 
   const rounds = Array.from({ length: currentRound }, (_, i) => i + 1);
   const activeMatches = Object.values(matches).filter(m => m.round === activeRoundTab);
+  const displayedCourts = activeMatches.map((match) => match.court);
+  if (activeRoundTab === currentRound) {
+    for (let courtId = 1; courtId <= numCourts; courtId++) {
+      if (!displayedCourts.includes(courtId)) displayedCourts.push(courtId);
+    }
+  }
+  displayedCourts.sort((a, b) => a - b);
   const showMarking = config.type.includes('marked') && showBadges;
   const activeCount = players.filter(p => !p.isWalkout).length;
 
@@ -76,7 +83,7 @@ export default function ManagerView() {
             <div className="flex gap-2 overflow-x-auto hide-scrollbar mb-2 flex-shrink-0 pt-2 pb-2 pl-1">
               {rounds.map(r => {
                 const roundMatches = Object.values(matches).filter(m => m.round === r);
-                const isComplete = roundMatches.length === numCourts && roundMatches.every(m => m.score1 !== null && m.score2 !== null);
+                const isComplete = roundMatches.length > 0 && roundMatches.every(m => m.score1 !== null && m.score2 !== null);
                 const isActive = r === activeRoundTab;
 
                 return (
@@ -105,16 +112,25 @@ export default function ManagerView() {
                 <div className="text-center text-slate-500 mt-10 italic">Menyiapkan Turnamen...</div>
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-6 gap-y-10 pb-4">
-                  {Array.from({ length: numCourts }).map((_, i) => {
-                    const courtNum = i + 1;
+                  {displayedCourts.map((courtNum) => {
                     const m = activeMatches.find(x => x.court === courtNum);
                     const cName = customCourtNames[courtNum] || `Court ${courtNum}`;
 
                     if (!m) {
+                      const hasUnfinishedPreviousMatch = Object.values(matches).some((match) => (
+                        match.court === courtNum &&
+                        match.round < activeRoundTab &&
+                        (match.score1 === null || match.score2 === null)
+                      ));
+                      const waitingMessage = hasUnfinishedPreviousMatch
+                        ? "Menunggu pertandingan sebelumnya selesai"
+                        : activeRoundTab === currentRound
+                          ? "Pemain tidak cukup"
+                          : "Belum ada pertandingan di ronde ini";
                       return (
                         <div key={`empty-r${activeRoundTab}-c${courtNum}`} className="relative bg-slate-800/40 rounded-xl shadow-inner border border-dashed border-slate-700 flex flex-col items-center justify-center min-h-[100px] mt-4 opacity-60">
                           <div className="text-slate-500 font-medium text-[13px] text-center px-4 italic">
-                            Menunggu putaran sebelumnya selesai
+                            {waitingMessage}
                           </div>
                           <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[11px] bg-slate-900 text-slate-500 px-4 py-1.5 rounded-full border border-slate-800 flex gap-2 items-center z-20">
                             {cName}
