@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTournamentStore } from '../store/useTournamentStore';
 import { FileText, List, X, Plus, History, Edit3, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
@@ -93,6 +93,8 @@ export default function SetupView() {
   const [localCourtNames, setLocalCourtNames] = useState(() => customCourtNames);
 
   const [inputMode, setInputMode] = useState('row'); // 'row' | 'bulk'
+  const playerInputRefs = useRef({});
+  const pendingFocusRowId = useRef(null);
   const [playerRows, setPlayerRows] = useState(() => {
     if (players.length > 0) {
       const rows = players.map(p => ({
@@ -115,6 +117,14 @@ export default function SetupView() {
   });
 
   const isMarked = localConfig.type.includes('marked');
+
+  useEffect(() => {
+    const rowId = pendingFocusRowId.current;
+    if (rowId === null) return;
+
+    playerInputRefs.current[rowId]?.focus();
+    pendingFocusRowId.current = null;
+  }, [playerRows]);
 
   const [bulkText, setBulkText] = useState(() => {
     if (players.length > 0) {
@@ -199,10 +209,13 @@ export default function SetupView() {
     setLocalCourtNames(prev => ({ ...prev, [i]: value }));
   };
 
-  const addRow = () => {
+  const addRow = (focusNewRow = false) => {
+    tempIdCounter++;
+    const newRow = { id: tempIdCounter, name: '', tier: 'B', isInactive: false, pid: null };
+    if (focusNewRow) pendingFocusRowId.current = newRow.id;
+
     setPlayerRows(prev => {
-      tempIdCounter++;
-      const updated = [...prev, { id: tempIdCounter, name: '', tier: 'B', isInactive: false, pid: null }];
+      const updated = [...prev, newRow];
       setBulkText(rowsToBulkText(updated, isMarked));
       return updated;
     });
@@ -479,7 +492,7 @@ export default function SetupView() {
           
           {inputMode === 'row' ? (
             <div className="space-y-2 flex-grow min-w-0 w-full overflow-hidden">
-              <div className="text-[10px] font-normal text-slate-500 mb-2 uppercase tracking-wide">* Tekan 'Enter' di kolom nama untuk baris baru</div>
+              <div className="text-[10px] font-normal text-slate-500 mb-2 uppercase tracking-wide">* Tekan 'Enter' di kolom nama untuk pindah ke baris berikutnya</div>
               <div className="space-y-2 w-full">
                 {playerRows.map((row, index) => {
                   const teamObj = localTeams.find(t => t.playerIds.includes(row.id));
@@ -488,6 +501,10 @@ export default function SetupView() {
                       <span className="w-4 shrink-0 text-slate-500 font-mono text-right font-bold text-xs">{index + 1}.</span>
                       <div className="relative min-w-0 flex-grow">
                         <input 
+                          ref={(input) => {
+                            if (input) playerInputRefs.current[row.id] = input;
+                            else delete playerInputRefs.current[row.id];
+                          }}
                           type="text" 
                           placeholder="Nama" 
                           value={row.name} 
@@ -495,7 +512,9 @@ export default function SetupView() {
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
-                              if (index === playerRows.length - 1) addRow();
+                              const nextRow = playerRows[index + 1];
+                              if (nextRow) playerInputRefs.current[nextRow.id]?.focus();
+                              else addRow(true);
                             }
                           }}
                           className={clsx(
